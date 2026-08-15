@@ -32,8 +32,8 @@
 import React, { useState, useEffect, useMemo, useCallback } from "react";
 import ReactDOM from "react-dom/client";
 import {
-  AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip,
-  ResponsiveContainer, BarChart, Bar, Cell as RCell,
+  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
+  ResponsiveContainer, Cell as RCell,
 } from "recharts";
 import {
   ChevronDown, ChevronRight, ChevronLeft, Flame, BookMarked, CheckCircle2,
@@ -185,7 +185,8 @@ export default function LectioTracker() {
   const [saveState, setSaveState] = useState("idle");
 
   const [filterTestament, setFilterTestament] = useState("all");
-  const [chartRange, setChartRange] = useState("all");
+  const [historyGranularity, setHistoryGranularity] = useState("year"); // "year" | "month"
+  const [historyMetric, setHistoryMetric] = useState("books"); // "chapters" | "books"
 
   const [booksView, setBooksView] = useState("testaments");
   const [booksTestament, setBooksTestament] = useState(null);
@@ -494,23 +495,50 @@ export default function LectioTracker() {
     };
   }, [scopeEventDates]);
 
-  const fullTimelineData = useMemo(() => {
-    const byDate = {};
-    scopeEventDates.forEach((d) => { byDate[d] = (byDate[d] || 0) + 1; });
-    const dates = Object.keys(byDate).sort();
-    let cum = 0;
-    return dates.map((d) => {
-      cum += byDate[d];
-      return { date: d, label: fmtDateShort(d), readings: cum };
+  // How many chapters were read (for the first time) or books were finished,
+  // bucketed by month or year — for the "Reading history" chart.
+  const bookCompletionDate = useMemo(() => {
+    const map = {};
+    BOOKS.forEach((b) => {
+      if ((bookProgress[b.name] || 0) < b.chapters) return; // not finished yet
+      let max = null;
+      for (let c = 1; c <= b.chapters; c++) {
+        const d = firstReadDate[keyFor(b.name, c)];
+        if (!d) { max = null; break; }
+        if (!max || d > max) max = d;
+      }
+      if (max) map[b.name] = max;
     });
-  }, [scopeEventDates]);
+    return map;
+  }, [bookProgress, firstReadDate]);
 
-  const timelineData = useMemo(() => {
-    if (chartRange === "all") return fullTimelineData;
-    const days = Number(chartRange);
-    const cutoff = new Date(Date.now() - days * DAY_MS);
-    return fullTimelineData.filter((d) => new Date(d.date + "T00:00:00") >= cutoff);
-  }, [fullTimelineData, chartRange]);
+  const periodKey = (isoDate, granularity) => (granularity === "year" ? isoDate.slice(0, 4) : isoDate.slice(0, 7));
+  const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  const periodLabel = (key, granularity) => {
+    if (granularity === "year") return key;
+    const [y, m] = key.split("-");
+    return `${MONTH_NAMES[Number(m) - 1]} '${y.slice(2)}`;
+  };
+
+  const historyData = useMemo(() => {
+    const scopeNames = new Set(scopeBooks.map((b) => b.name));
+    const counts = {};
+    if (historyMetric === "chapters") {
+      Object.entries(firstReadDate).forEach(([k, d]) => {
+        const book = k.split("::")[0];
+        if (!scopeNames.has(book)) return;
+        const pk = periodKey(d, historyGranularity);
+        counts[pk] = (counts[pk] || 0) + 1;
+      });
+    } else {
+      Object.entries(bookCompletionDate).forEach(([book, d]) => {
+        if (!scopeNames.has(book)) return;
+        const pk = periodKey(d, historyGranularity);
+        counts[pk] = (counts[pk] || 0) + 1;
+      });
+    }
+    return Object.keys(counts).sort().map((k) => ({ period: k, label: periodLabel(k, historyGranularity), count: counts[k] }));
+  }, [firstReadDate, bookCompletionDate, scopeBooks, historyMetric, historyGranularity]);
 
   const recent = useMemo(() => {
     const scopeNames = new Set(scopeBooks.map((b) => b.name));
@@ -1230,8 +1258,6 @@ export default function LectioTracker() {
             <div className="flex flex-wrap items-center gap-3 rounded-xl p-3" style={{ background: PALETTE.bgSoft, border: `1px solid ${PALETTE.wood}` }}>
               <span className="text-[11px] uppercase tracking-wider" style={{ color: PALETTE.muted }}>Testament</span>
               <PillGroup value={filterTestament} onChange={setFilterTestament} options={[{ value: "all", label: "All" }, { value: "ot", label: "Old" }, { value: "nt", label: "New" }]} />
-              <span className="text-[11px] uppercase tracking-wider ml-2" style={{ color: PALETTE.muted }}>Chart range</span>
-              <PillGroup value={chartRange} onChange={setChartRange} options={[{ value: "30", label: "30d" }, { value: "90", label: "90d" }, { value: "365", label: "1y" }, { value: "all", label: "All" }]} />
             </div>
 
             <Card className="flex flex-wrap items-center gap-6">
@@ -1258,27 +1284,44 @@ export default function LectioTracker() {
             <RereadCard />
 
             <Card>
-              <h3 className="lectio-display text-lg mb-3" style={{ color: PALETTE.parchment }}>Readings logged over time</h3>
-              {fullTimelineData.length > 1 ? (
-                <ResponsiveContainer width="100%" height={200}>
-                  <AreaChart data={timelineData}>
-                    <defs>
-                      <linearGradient id="lectioGold" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="0%" stopColor={PALETTE.gold} stopOpacity={0.55} />
-                        <stop offset="100%" stopColor={PALETTE.gold} stopOpacity={0.03} />
-                      </linearGradient>
-                    </defs>
-                    <CartesianGrid stroke={PALETTE.wood} vertical={false} />
-                    <XAxis dataKey="label" tick={{ fill: PALETTE.muted, fontSize: 11 }} axisLine={{ stroke: PALETTE.wood }} tickLine={false} minTickGap={30} />
-                    <YAxis tick={{ fill: PALETTE.muted, fontSize: 11 }} axisLine={false} tickLine={false} width={30} />
-                    <Tooltip contentStyle={{ background: PALETTE.parchment, border: `1px solid ${PALETTE.goldSoft}`, borderRadius: 8, fontSize: 12 }} labelStyle={{ color: PALETTE.ink, fontWeight: 600 }} formatter={(v) => [v, "Cumulative readings"]} />
-                    <Area type="monotone" dataKey="readings" stroke={PALETTE.gold} strokeWidth={2} fill="url(#lectioGold)" />
-                  </AreaChart>
-                </ResponsiveContainer>
+              <div className="flex items-center justify-between flex-wrap gap-3 mb-3">
+                <h3 className="lectio-display text-lg" style={{ color: PALETTE.parchment }}>Reading history</h3>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <PillGroup value={historyMetric} onChange={setHistoryMetric} options={[{ value: "books", label: "Books" }, { value: "chapters", label: "Chapters" }]} />
+                  <PillGroup value={historyGranularity} onChange={setHistoryGranularity} options={[{ value: "year", label: "Year" }, { value: "month", label: "Month" }]} />
+                </div>
+              </div>
+              {historyData.length > 0 ? (
+                <>
+                  <ResponsiveContainer width="100%" height={200}>
+                    <BarChart data={historyData}>
+                      <CartesianGrid stroke={PALETTE.wood} vertical={false} />
+                      <XAxis dataKey="label" tick={{ fill: PALETTE.muted, fontSize: 11 }} axisLine={{ stroke: PALETTE.wood }} tickLine={false} minTickGap={20} />
+                      <YAxis tick={{ fill: PALETTE.muted, fontSize: 11 }} axisLine={false} tickLine={false} width={30} allowDecimals={false} />
+                      <Tooltip
+                        contentStyle={{ background: PALETTE.parchment, border: `1px solid ${PALETTE.goldSoft}`, borderRadius: 8, fontSize: 12 }}
+                        labelStyle={{ color: PALETTE.ink, fontWeight: 600 }}
+                        formatter={(v) => [v, historyMetric === "books" ? "Books finished" : "Chapters read (first time)"]}
+                      />
+                      <Bar dataKey="count" radius={[4, 4, 0, 0]} fill={PALETTE.gold} maxBarSize={40} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                  <div className="flex flex-wrap gap-2 mt-3">
+                    {historyData.map((d) => (
+                      <span key={d.period} className="text-[11px] rounded-full px-2.5 py-1" style={{ background: PALETTE.wood, color: PALETTE.parchment }}>
+                        {d.label}: <span style={{ color: PALETTE.gold, fontWeight: 600 }}>{d.count}</span>
+                      </span>
+                    ))}
+                  </div>
+                </>
               ) : (
-                <div className="text-sm py-8 text-center" style={{ color: PALETTE.muted }}>Mark a few chapters read to see your progress line take shape.</div>
+                <div className="text-sm py-8 text-center" style={{ color: PALETTE.muted }}>
+                  {historyMetric === "books" ? "Finish a book to see it show up here." : "Mark a few chapters read to see your history take shape."}
+                </div>
               )}
-              <p className="text-[11px] mt-2" style={{ color: PALETTE.muted }}>Counts every reading you log — including re-reads — within the selected testament and range.</p>
+              <p className="text-[11px] mt-2" style={{ color: PALETTE.muted }}>
+                {historyMetric === "books" ? "A book is counted the moment its last remaining chapter is first read." : "Counts each chapter once, in the period it was first read — re-reads aren't counted again."}
+              </p>
             </Card>
 
             <Card>
