@@ -181,11 +181,11 @@ export default function LectioTracker() {
   // readings: { "Book::Chapter": [{ id, date }, ...] }  — multiple entries = re-reads
   const [readings, setReadings] = useState({});
   const [loaded, setLoaded] = useState(false);
-  const [activeTab, setActiveTab] = useState("dashboard");
+  const [activeTab, setActiveTab] = useState("books");
   const [saveState, setSaveState] = useState("idle");
 
   const [filterTestament, setFilterTestament] = useState("all");
-  const [historyGranularity, setHistoryGranularity] = useState("year"); // "year" | "month"
+  const [historyGranularity, setHistoryGranularity] = useState("month"); // "year" | "month"
   const [historyMetric, setHistoryMetric] = useState("books"); // "chapters" | "books"
 
   const [booksView, setBooksView] = useState("testaments");
@@ -559,6 +559,39 @@ export default function LectioTracker() {
     }
     return Object.keys(counts).sort().map((k) => ({ period: k, label: periodLabel(k, historyGranularity), count: counts[k] }));
   }, [firstReadDate, bookCompletionDate, scopeBooks, historyMetric, historyGranularity]);
+
+  // Which specific books finished in each period — shown on hover instead of
+  // a redundant month+count (both already visible on the axis / chips).
+  const historyBooksByPeriod = useMemo(() => {
+    const scopeNames = new Set(scopeBooks.map((b) => b.name));
+    const map = {};
+    Object.entries(bookCompletionDate).forEach(([book, d]) => {
+      if (!scopeNames.has(book)) return;
+      const pk = periodKey(d, historyGranularity);
+      if (!map[pk]) map[pk] = [];
+      map[pk].push(book);
+    });
+    Object.values(map).forEach((arr) => arr.sort());
+    return map;
+  }, [bookCompletionDate, scopeBooks, historyGranularity]);
+
+  const HistoryTooltip = ({ active, payload }) => {
+    if (!active || !payload || !payload.length) return null;
+    const period = payload[0].payload.period;
+    if (historyMetric === "books") {
+      const names = historyBooksByPeriod[period] || [];
+      return (
+        <div style={{ background: PALETTE.parchment, border: `1px solid ${PALETTE.goldSoft}`, borderRadius: 8, padding: "8px 10px", fontSize: 12, maxWidth: 220 }}>
+          {names.length ? names.map((n) => <div key={n} style={{ color: PALETTE.ink }}>{n}</div>) : <div style={{ color: PALETTE.ink }}>No books finished</div>}
+        </div>
+      );
+    }
+    return (
+      <div style={{ background: PALETTE.parchment, border: `1px solid ${PALETTE.goldSoft}`, borderRadius: 8, padding: "8px 10px", fontSize: 12 }}>
+        <div style={{ color: PALETTE.ink }}>{payload[0].value} chapter{payload[0].value === 1 ? "" : "s"} read</div>
+      </div>
+    );
+  };
 
   const recent = useMemo(() => {
     const scopeNames = new Set(scopeBooks.map((b) => b.name));
@@ -1352,11 +1385,7 @@ export default function LectioTracker() {
                       <CartesianGrid stroke={PALETTE.wood} vertical={false} />
                       <XAxis dataKey="label" tick={{ fill: PALETTE.muted, fontSize: 11 }} axisLine={{ stroke: PALETTE.wood }} tickLine={false} minTickGap={20} />
                       <YAxis tick={{ fill: PALETTE.muted, fontSize: 11 }} axisLine={false} tickLine={false} width={30} allowDecimals={false} />
-                      <Tooltip
-                        contentStyle={{ background: PALETTE.parchment, border: `1px solid ${PALETTE.goldSoft}`, borderRadius: 8, fontSize: 12 }}
-                        labelStyle={{ color: PALETTE.ink, fontWeight: 600 }}
-                        formatter={(v) => [v, historyMetric === "books" ? "Books finished" : "Chapters read (first time)"]}
-                      />
+                      <Tooltip content={<HistoryTooltip />} cursor={{ fill: "rgba(212,175,55,0.08)" }} />
                       <Bar dataKey="count" radius={[4, 4, 0, 0]} fill={PALETTE.gold} maxBarSize={40} />
                     </BarChart>
                   </ResponsiveContainer>
