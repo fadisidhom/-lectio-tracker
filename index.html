@@ -426,6 +426,26 @@ export default function LectioTracker() {
     [scopeBooks, bookProgress]
   );
 
+  // Books currently being read (started, not yet finished) across the whole
+  // canon — used for the "Current reading" shelf at the top of the Books tab.
+  // Ordered by most recent activity so whatever you last picked up sits first.
+  const currentlyReadingBooks = useMemo(() => {
+    return BOOKS
+      .map((b) => {
+        const read = bookProgress[b.name] || 0;
+        if (read <= 0 || read >= b.chapters) return null;
+        let lastDate = "";
+        for (let c = 1; c <= b.chapters; c++) {
+          const entries = readings[keyFor(b.name, c)];
+          if (!entries) continue;
+          entries.forEach((e) => { if (e.date > lastDate) lastDate = e.date; });
+        }
+        return { book: b, read, lastDate };
+      })
+      .filter(Boolean)
+      .sort((a, b) => (b.lastDate > a.lastDate ? 1 : b.lastDate < a.lastDate ? -1 : 0));
+  }, [bookProgress, readings]);
+
   const versesDetail = useMemo(
     () => scopeBooks
       .map((b) => {
@@ -1138,27 +1158,59 @@ export default function LectioTracker() {
   const BooksTab = () => {
     if (booksView === "testaments") {
       return (
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 lectio-fade-in">
-          {testamentProgress.map((t) => (
-            <button
-              key={t.key}
-              onClick={() => { setBooksTestament(t.key); setBooksView("grid"); }}
-              className="lectio-tile lectio-card rounded-2xl p-6 text-left"
-              style={{ background: `linear-gradient(150deg, ${PALETTE.bgSoft2}, ${PALETTE.bgSoft})`, border: `1px solid ${PALETTE.wood}` }}
-            >
-              <div className="flex items-center justify-between mb-1">
-                <h2 className="lectio-display text-2xl" style={{ color: PALETTE.parchment }}>{t.label}</h2>
-                {t.bookPasses > t.booksDoneOnce && <RereadChip count={t.bookPasses - t.booksDoneOnce} />}
+        <div className="lectio-fade-in">
+          {currentlyReadingBooks.length > 0 && (
+            <div className="mb-5">
+              <h3 className="lectio-display text-lg mb-3" style={{ color: PALETTE.parchment }}>Current reading</h3>
+              <div className="grid gap-3" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))" }}>
+                {currentlyReadingBooks.map(({ book: b, read }) => {
+                  const pct = Math.round((read / b.chapters) * 100);
+                  const t = testamentOf(b.testament);
+                  return (
+                    <button
+                      key={b.name}
+                      onClick={() => openBook(b)}
+                      className="lectio-tile lectio-card rounded-xl p-3 text-left flex items-center gap-3"
+                      style={{ background: `linear-gradient(150deg, ${PALETTE.bgSoft2}, ${PALETTE.bgSoft})`, border: `1px solid ${PALETTE.amber}` }}
+                    >
+                      <div className="rounded-lg p-2 flex-shrink-0" style={{ background: PALETTE.wood }}>
+                        <BookMarked size={16} color={PALETTE.amber} />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="lectio-display text-sm truncate" style={{ color: PALETTE.parchment }}>{b.name}</div>
+                        <div className="w-full h-1.5 rounded-full overflow-hidden my-1" style={{ background: PALETTE.wood }}>
+                          <div style={{ width: `${pct}%`, height: "100%", background: `linear-gradient(90deg, ${t.colorDeep}, ${t.color})` }} />
+                        </div>
+                        <span className="text-[10px]" style={{ color: PALETTE.amber }}>{read}/{b.chapters} chapters</span>
+                      </div>
+                    </button>
+                  );
+                })}
               </div>
-              <p className="text-xs mb-3" style={{ color: PALETTE.muted }}>
-                {BOOKS.filter((b) => b.testament === t.key).length} books · {t.read}/{t.total} chapters · {t.totalReads} total reading{t.totalReads === 1 ? "" : "s"}
-              </p>
-              <div className="w-full h-2 rounded-full overflow-hidden" style={{ background: PALETTE.wood }}>
-                <div style={{ width: `${t.pct}%`, height: "100%", background: `linear-gradient(90deg, ${t.colorDeep}, ${t.color})` }} />
-              </div>
-              <span className="text-xs mt-2 inline-block" style={{ color: t.color }}>{t.pct}% read →</span>
-            </button>
-          ))}
+            </div>
+          )}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            {testamentProgress.map((t) => (
+              <button
+                key={t.key}
+                onClick={() => { setBooksTestament(t.key); setBooksView("grid"); }}
+                className="lectio-tile lectio-card rounded-2xl p-6 text-left"
+                style={{ background: `linear-gradient(150deg, ${PALETTE.bgSoft2}, ${PALETTE.bgSoft})`, border: `1px solid ${PALETTE.wood}` }}
+              >
+                <div className="flex items-center justify-between mb-1">
+                  <h2 className="lectio-display text-2xl" style={{ color: PALETTE.parchment }}>{t.label}</h2>
+                  {t.bookPasses > t.booksDoneOnce && <RereadChip count={t.bookPasses - t.booksDoneOnce} />}
+                </div>
+                <p className="text-xs mb-3" style={{ color: PALETTE.muted }}>
+                  {BOOKS.filter((b) => b.testament === t.key).length} books · {t.read}/{t.total} chapters · {t.totalReads} total reading{t.totalReads === 1 ? "" : "s"}
+                </p>
+                <div className="w-full h-2 rounded-full overflow-hidden" style={{ background: PALETTE.wood }}>
+                  <div style={{ width: `${t.pct}%`, height: "100%", background: `linear-gradient(90deg, ${t.colorDeep}, ${t.color})` }} />
+                </div>
+                <span className="text-xs mt-2 inline-block" style={{ color: t.color }}>{t.pct}% read →</span>
+              </button>
+            ))}
+          </div>
         </div>
       );
     }
@@ -1177,21 +1229,23 @@ export default function LectioTracker() {
               const read = bookProgress[b.name] || 0;
               const pct = Math.round((read / b.chapters) * 100);
               const done = read >= b.chapters;
+              const inProgress = read > 0 && !done;
               const completions = bookCompletions[b.name] || 0;
               return (
-                <button key={b.name} onClick={() => openBook(b)} className="lectio-tile lectio-card rounded-xl p-3 text-left" style={{ background: `linear-gradient(150deg, ${PALETTE.bgSoft2}, ${PALETTE.bgSoft})`, border: `1px solid ${done ? PALETTE.gold : PALETTE.wood}` }}>
+                <button key={b.name} onClick={() => openBook(b)} className="lectio-tile lectio-card rounded-xl p-3 text-left" style={{ background: `linear-gradient(150deg, ${PALETTE.bgSoft2}, ${PALETTE.bgSoft})`, border: `1px solid ${done ? PALETTE.gold : inProgress ? PALETTE.amber : PALETTE.wood}` }}>
                   <div className="flex items-center justify-between mb-2">
                     <span className="text-[10px] font-semibold rounded px-1.5 py-0.5" style={{ background: PALETTE.parchmentSoft, color: PALETTE.ink }}>{b.abbr}</span>
                     <div className="flex items-center gap-1">
                       {completions >= 2 && <RereadChip count={completions} />}
                       {done && <CheckCircle2 size={14} color={PALETTE.gold} />}
+                      {inProgress && <BookMarked size={14} color={PALETTE.amber} />}
                     </div>
                   </div>
                   <div className="lectio-display text-sm mb-2" style={{ color: PALETTE.parchment, lineHeight: 1.15 }}>{b.name}</div>
                   <div className="w-full h-1.5 rounded-full overflow-hidden mb-1" style={{ background: PALETTE.wood }}>
                     <div style={{ width: `${pct}%`, height: "100%", background: `linear-gradient(90deg, ${t.colorDeep}, ${t.color})` }} />
                   </div>
-                  <span className="text-[10px]" style={{ color: PALETTE.muted }}>{read}/{b.chapters} chapters</span>
+                  <span className="text-[10px]" style={{ color: inProgress ? PALETTE.amber : PALETTE.muted }}>{read}/{b.chapters} chapters</span>
                 </button>
               );
             })}
