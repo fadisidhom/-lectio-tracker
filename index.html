@@ -1,0 +1,1368 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Lectio - Catholic Scripture Reading Tracker</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script type="importmap">
+{
+  "imports": {
+    "react": "https://esm.sh/react@18.3.1",
+    "react-dom": "https://esm.sh/react-dom@18.3.1",
+    "react-dom/client": "https://esm.sh/react-dom@18.3.1/client?deps=react@18.3.1",
+    "recharts": "https://esm.sh/recharts@2.12.7?deps=react@18.3.1,react-dom@18.3.1",
+    "lucide-react": "https://esm.sh/lucide-react@0.383.0?deps=react@18.3.1"
+  }
+}
+</script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<style>
+  html, body { background: #1B140F; margin: 0; padding: 0; }
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-thumb { background: #3A2B1C; border-radius: 4px; }
+  .lectio-scroll { scrollbar-width: thin; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel" data-type="module" data-presets="react">
+import React, { useState, useEffect, useMemo, useCallback } from "react";
+import ReactDOM from "react-dom/client";
+import {
+  AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip,
+  ResponsiveContainer, BarChart, Bar, Cell as RCell,
+} from "recharts";
+import {
+  ChevronDown, ChevronRight, ChevronLeft, Flame, BookMarked, CheckCircle2,
+  Calendar, X, Trash2, Library, Repeat, Award, Lock, TrendingUp,
+  XCircle, ListChecks, Sparkles, Download, Upload,
+} from "lucide-react";
+
+// ---------------------------------------------------------------------------
+// Catholic canon: 73 books, plain Old / New Testament order, with the
+// standard short-form abbreviation used on real spine labels.
+// ---------------------------------------------------------------------------
+const PALETTE = {
+  bg: "#1B140F",
+  bgSoft: "#251C15",
+  bgSoft2: "#2C2118",
+  wood: "#3A2B1C",
+  parchment: "#F1E4C4",
+  parchmentSoft: "#E7D6AC",
+  ink: "#2A2118",
+  inkSoft: "#5C4E3D",
+  gold: "#D4AF37",
+  goldSoft: "#8C7226",
+  burgundy: "#9B3A3A",
+  burgundyDeep: "#6E2424",
+  slate: "#4E769C",
+  slateDeep: "#345170",
+  muted: "#B8A98A",
+  amber: "#D9822B",
+  amberDeep: "#A45A16",
+};
+
+const TESTAMENTS = [
+  { key: "ot", label: "Old Testament", color: PALETTE.burgundy, colorDeep: PALETTE.burgundyDeep },
+  { key: "nt", label: "New Testament", color: PALETTE.slate, colorDeep: PALETTE.slateDeep },
+];
+
+const RAW_BOOKS = [
+  ["Genesis", 50, "ot", "Gn"], ["Exodus", 40, "ot", "Ex"], ["Leviticus", 27, "ot", "Lv"],
+  ["Numbers", 36, "ot", "Nm"], ["Deuteronomy", 34, "ot", "Dt"], ["Joshua", 24, "ot", "Jos"],
+  ["Judges", 21, "ot", "Jgs"], ["Ruth", 4, "ot", "Ru"], ["1 Samuel", 31, "ot", "1Sm"],
+  ["2 Samuel", 24, "ot", "2Sm"], ["1 Kings", 22, "ot", "1Kgs"], ["2 Kings", 25, "ot", "2Kgs"],
+  ["1 Chronicles", 29, "ot", "1Chr"], ["2 Chronicles", 36, "ot", "2Chr"], ["Ezra", 10, "ot", "Ezr"],
+  ["Nehemiah", 13, "ot", "Neh"], ["Tobit", 14, "ot", "Tb"], ["Judith", 16, "ot", "Jdt"],
+  ["Esther", 10, "ot", "Est"], ["1 Maccabees", 16, "ot", "1Mc"], ["2 Maccabees", 15, "ot", "2Mc"],
+  ["Job", 42, "ot", "Jb"], ["Psalms", 150, "ot", "Ps"], ["Proverbs", 31, "ot", "Prv"],
+  ["Ecclesiastes", 12, "ot", "Eccl"], ["Song of Songs", 8, "ot", "Sg"], ["Wisdom", 19, "ot", "Wis"],
+  ["Sirach", 51, "ot", "Sir"], ["Isaiah", 66, "ot", "Is"], ["Jeremiah", 52, "ot", "Jer"],
+  ["Lamentations", 5, "ot", "Lam"], ["Baruch", 6, "ot", "Bar"], ["Ezekiel", 48, "ot", "Ez"],
+  ["Daniel", 14, "ot", "Dn"], ["Hosea", 14, "ot", "Hos"], ["Joel", 3, "ot", "Jl"],
+  ["Amos", 9, "ot", "Am"], ["Obadiah", 1, "ot", "Ob"], ["Jonah", 4, "ot", "Jon"],
+  ["Micah", 7, "ot", "Mi"], ["Nahum", 3, "ot", "Na"], ["Habakkuk", 3, "ot", "Hb"],
+  ["Zephaniah", 3, "ot", "Zep"], ["Haggai", 2, "ot", "Hg"], ["Zechariah", 14, "ot", "Zec"],
+  ["Malachi", 4, "ot", "Mal"],
+  ["Matthew", 28, "nt", "Mt"], ["Mark", 16, "nt", "Mk"], ["Luke", 24, "nt", "Lk"],
+  ["John", 21, "nt", "Jn"], ["Acts", 28, "nt", "Acts"], ["Romans", 16, "nt", "Rom"],
+  ["1 Corinthians", 16, "nt", "1Cor"], ["2 Corinthians", 13, "nt", "2Cor"], ["Galatians", 6, "nt", "Gal"],
+  ["Ephesians", 6, "nt", "Eph"], ["Philippians", 4, "nt", "Phil"], ["Colossians", 4, "nt", "Col"],
+  ["1 Thessalonians", 5, "nt", "1Thes"], ["2 Thessalonians", 3, "nt", "2Thes"], ["1 Timothy", 6, "nt", "1Tm"],
+  ["2 Timothy", 4, "nt", "2Tm"], ["Titus", 3, "nt", "Ti"], ["Philemon", 1, "nt", "Phlm"],
+  ["Hebrews", 13, "nt", "Heb"], ["James", 5, "nt", "Jas"], ["1 Peter", 5, "nt", "1Pt"],
+  ["2 Peter", 3, "nt", "2Pt"], ["1 John", 5, "nt", "1Jn"], ["2 John", 1, "nt", "2Jn"],
+  ["3 John", 1, "nt", "3Jn"], ["Jude", 1, "nt", "Jude"], ["Revelation", 22, "nt", "Rv"],
+];
+
+const BOOKS = RAW_BOOKS.map(([name, chapters, testament, abbr]) => ({ name, chapters, testament, abbr }));
+const BOOK_BY_NAME = Object.fromEntries(BOOKS.map((b) => [b.name, b]));
+const TOTAL_CHAPTERS = BOOKS.reduce((s, b) => s + b.chapters, 0);
+const testamentOf = (key) => TESTAMENTS.find((t) => t.key === key);
+const todayStr = () => new Date().toISOString().slice(0, 10);
+const DAY_MS = 86400000;
+const fmtDate = (d) =>
+  new Date(d + "T00:00:00").toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+const fmtDateShort = (d) =>
+  new Date(d + "T00:00:00").toLocaleDateString(undefined, { month: "short", day: "numeric" });
+const ordinal = (n) => {
+  const s = ["th", "st", "nd", "rd"], v = n % 100;
+  return n + (s[(v - 20) % 10] || s[v] || s[0]);
+};
+const makeId = () => `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+
+// Total verses per book — sourced for the 66-book portion; the 7
+// deuterocanonical books are reasonable estimates since standard tallies
+// don't cover them. Used only to estimate a "verses read" total.
+const BOOK_VERSES = {
+  "Genesis": 1533, "Exodus": 1213, "Leviticus": 859, "Numbers": 1288, "Deuteronomy": 959,
+  "Joshua": 658, "Judges": 618, "Ruth": 85, "1 Samuel": 810, "2 Samuel": 695,
+  "1 Kings": 816, "2 Kings": 719, "1 Chronicles": 942, "2 Chronicles": 822, "Ezra": 280,
+  "Nehemiah": 406, "Tobit": 244, "Judith": 339, "Esther": 167, "1 Maccabees": 924,
+  "2 Maccabees": 555, "Job": 1070, "Psalms": 2461, "Proverbs": 915, "Ecclesiastes": 222,
+  "Song of Songs": 117, "Wisdom": 439, "Sirach": 1424, "Isaiah": 1292, "Jeremiah": 1364,
+  "Lamentations": 154, "Baruch": 213, "Ezekiel": 1273, "Daniel": 463, "Hosea": 197,
+  "Joel": 73, "Amos": 146, "Obadiah": 21, "Jonah": 48, "Micah": 105,
+  "Nahum": 47, "Habakkuk": 56, "Zephaniah": 53, "Haggai": 38, "Zechariah": 211,
+  "Malachi": 55, "Matthew": 1071, "Mark": 678, "Luke": 1151, "John": 879,
+  "Acts": 1007, "Romans": 433, "1 Corinthians": 437, "2 Corinthians": 257, "Galatians": 149,
+  "Ephesians": 155, "Philippians": 104, "Colossians": 95, "1 Thessalonians": 89, "2 Thessalonians": 47,
+  "1 Timothy": 113, "2 Timothy": 83, "Titus": 46, "Philemon": 25, "Hebrews": 303,
+  "James": 108, "1 Peter": 105, "2 Peter": 61, "1 John": 105, "2 John": 13,
+  "3 John": 14, "Jude": 25, "Revelation": 404,
+};
+const TOTAL_VERSES = Object.values(BOOK_VERSES).reduce((a, v) => a + v, 0);
+
+const STORAGE_KEY = "lectio-readings-v2";
+const DATA_VERSION = 1; // bump this whenever the saved-data shape changes, and add a case to migrateData()
+
+// Upgrades older saved payloads to the current shape. Add a new "if (data.dataVersion < N)"
+// block here whenever a future change alters how data is stored, so nobody's history is lost.
+function migrateData(raw) {
+  let data = raw;
+  if (!data || typeof data !== "object" || Array.isArray(data)) {
+    // Oldest format: the bare { "Book::Chapter": [...] } map with no version wrapper at all.
+    data = { dataVersion: 0, readings: raw && typeof raw === "object" ? raw : {} };
+  }
+  if (typeof data.dataVersion !== "number") data.dataVersion = 0;
+  // if (data.dataVersion < 2) { ...convert v1 shape to v2 shape here... data.dataVersion = 2; }
+  return { readings: data.readings || {}, dataVersion: DATA_VERSION };
+}
+
+function loadFromLocalStorage() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return migrateData(parsed).readings;
+  } catch (e) {
+    return {};
+  }
+}
+
+function saveToLocalStorage(readings) {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ dataVersion: DATA_VERSION, readings }));
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
+const CHAPTER_MILESTONES = [1, 10, 25, 50, 100, 250, 500, 750, 1000]
+  .filter((n) => n < TOTAL_CHAPTERS)
+  .concat([TOTAL_CHAPTERS]);
+const STREAK_MILESTONES = [3, 7, 14, 30, 100];
+
+export default function LectioTracker() {
+  // readings: { "Book::Chapter": [{ id, date }, ...] }  — multiple entries = re-reads
+  const [readings, setReadings] = useState({});
+  const [loaded, setLoaded] = useState(false);
+  const [activeTab, setActiveTab] = useState("dashboard");
+  const [saveState, setSaveState] = useState("idle");
+
+  const [filterTestament, setFilterTestament] = useState("all");
+  const [chartRange, setChartRange] = useState("all");
+
+  const [booksView, setBooksView] = useState("testaments");
+  const [booksTestament, setBooksTestament] = useState(null);
+  const [booksSelectedBook, setBooksSelectedBook] = useState(null);
+  const [selected, setSelected] = useState(null); // { book, chapter }
+  const [expandedStat, setExpandedStat] = useState(null);
+
+  useEffect(() => {
+    setReadings(loadFromLocalStorage());
+    setLoaded(true);
+  }, []);
+
+  const persist = useCallback((next) => {
+    setSaveState("saving");
+    const ok = saveToLocalStorage(next);
+    setSaveState(ok ? "idle" : "error");
+  }, []);
+
+  const exportData = () => {
+    const payload = JSON.stringify({ dataVersion: DATA_VERSION, readings, exportedAt: new Date().toISOString() }, null, 2);
+    const blob = new Blob([payload], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `lectio-backup-${todayStr()}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  const importInputRef = React.useRef(null);
+  const importData = (file) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const parsed = JSON.parse(e.target.result);
+        const { readings: imported } = migrateData(parsed);
+        setReadings(imported);
+        persist(imported);
+        setSaveState("idle");
+      } catch (err) {
+        window.alert("That file couldn't be read — make sure it's a Lectio backup .json file.");
+      }
+    };
+    reader.readAsText(file);
+  };
+
+
+  const keyFor = (book, chapter) => `${book}::${chapter}`;
+
+  const addReading = (book, chapter, date) => {
+    setReadings((prev) => {
+      const k = keyFor(book, chapter);
+      const entries = prev[k] ? [...prev[k]] : [];
+      entries.push({ id: makeId(), date });
+      const next = { ...prev, [k]: entries };
+      persist(next);
+      return next;
+    });
+  };
+
+  const updateEntryDate = (book, chapter, id, date) => {
+    setReadings((prev) => {
+      const k = keyFor(book, chapter);
+      const entries = (prev[k] || []).map((e) => (e.id === id ? { ...e, date } : e));
+      const next = { ...prev, [k]: entries };
+      persist(next);
+      return next;
+    });
+  };
+
+  const removeEntry = (book, chapter, id) => {
+    setReadings((prev) => {
+      const k = keyFor(book, chapter);
+      const entries = (prev[k] || []).filter((e) => e.id !== id);
+      const next = { ...prev };
+      if (entries.length) next[k] = entries; else delete next[k];
+      persist(next);
+      return next;
+    });
+  };
+
+  const clearAllEntries = (book, chapter) => {
+    setReadings((prev) => {
+      const next = { ...prev };
+      delete next[keyFor(book, chapter)];
+      persist(next);
+      return next;
+    });
+  };
+
+  const handleCellClick = (book, chapter) => setSelected({ book, chapter });
+
+  const openBook = (book) => {
+    setBooksTestament(book.testament);
+    setBooksSelectedBook(book.name);
+    setBooksView("chapters");
+    setSelected(null);
+  };
+
+  const goToChapter = (book, chapter) => {
+    setActiveTab("books");
+    openBook(BOOK_BY_NAME[book]);
+    setSelected({ book, chapter });
+  };
+
+  // ------------------------------ base derived data ------------------------------
+  const chapterKeys = Object.keys(readings).filter((k) => readings[k] && readings[k].length);
+  const bookProgress = useMemo(() => {
+    const map = {};
+    BOOKS.forEach((b) => (map[b.name] = 0));
+    chapterKeys.forEach((k) => {
+      const book = k.split("::")[0];
+      map[book] = (map[book] || 0) + 1;
+    });
+    return map;
+  }, [readings]);
+
+  const bookTotalReadings = useMemo(() => {
+    const map = {};
+    BOOKS.forEach((b) => (map[b.name] = 0));
+    Object.entries(readings).forEach(([k, entries]) => {
+      const book = k.split("::")[0];
+      map[book] = (map[book] || 0) + entries.length;
+    });
+    return map;
+  }, [readings]);
+
+  // Book "completions" — how many times a book has been read cover to cover.
+  // This is the minimum number of entries across every chapter in the book
+  // (0 if any chapter is still unread), so a re-read only counts once the
+  // WHOLE book has been read again — never a single chapter on its own.
+  const bookCompletions = useMemo(() => {
+    const map = {};
+    BOOKS.forEach((b) => {
+      let min = Infinity;
+      for (let c = 1; c <= b.chapters; c++) {
+        const entries = readings[keyFor(b.name, c)];
+        const n = entries ? entries.length : 0;
+        if (n < min) min = n;
+        if (min === 0) break;
+      }
+      map[b.name] = min === Infinity ? 0 : min;
+    });
+    return map;
+  }, [readings]);
+
+  const firstReadDate = useMemo(() => {
+    const map = {};
+    Object.entries(readings).forEach(([k, entries]) => {
+      if (!entries.length) return;
+      map[k] = entries.reduce((min, e) => (e.date < min ? e.date : min), entries[0].date);
+    });
+    return map;
+  }, [readings]);
+
+  const readCount = chapterKeys.length;
+  const booksCompleted = BOOKS.filter((b) => bookProgress[b.name] >= b.chapters).length;
+
+  const versesReadEstimate = useMemo(
+    () => BOOKS.reduce((s, b) => s + Math.round(((bookProgress[b.name] || 0) / b.chapters) * (BOOK_VERSES[b.name] || 0)), 0),
+    [bookProgress]
+  );
+
+  const testamentProgress = useMemo(() => {
+    return TESTAMENTS.map((t) => {
+      const booksIn = BOOKS.filter((b) => b.testament === t.key);
+      const total = booksIn.reduce((s, b) => s + b.chapters, 0);
+      const read = booksIn.reduce((s, b) => s + (bookProgress[b.name] || 0), 0);
+      const totalReads = booksIn.reduce((s, b) => s + (bookTotalReadings[b.name] || 0), 0);
+      const bookPasses = booksIn.reduce((s, b) => s + (bookCompletions[b.name] || 0), 0);
+      const booksDoneOnce = booksIn.filter((b) => (bookCompletions[b.name] || 0) >= 1).length;
+      return { ...t, total, read, pct: total ? Math.round((read / total) * 100) : 0, totalReads, bookPasses, booksDoneOnce };
+    });
+  }, [bookProgress, bookTotalReadings, bookCompletions]);
+
+  // Quick lookup maps for the "N book(s) re-read" labels at the testament level —
+  // sourced from whole-book completions, not chapter-level entry counts.
+  const testamentReadCounts = useMemo(() => {
+    const map = {};
+    testamentProgress.forEach((t) => { map[t.key] = t.bookPasses; });
+    return map;
+  }, [testamentProgress]);
+  const testamentChapterCounts = useMemo(() => {
+    const map = {};
+    testamentProgress.forEach((t) => { map[t.key] = t.booksDoneOnce; });
+    return map;
+  }, [testamentProgress]);
+
+  // Most re-read books — a book only appears once it's been completed
+  // cover-to-cover more than once, not from individual chapter re-reads.
+  const topRereadBooks = useMemo(() => {
+    return BOOKS
+      .map((b) => ({ name: b.name, completions: bookCompletions[b.name] || 0 }))
+      .filter((b) => b.completions > 1)
+      .sort((a, b) => b.completions - a.completions)
+      .slice(0, 5);
+  }, [bookCompletions]);
+
+  // ------------------------------ dashboard scope (filter-aware) ------------------------------
+  const scopeBooks = useMemo(
+    () => (filterTestament === "all" ? BOOKS : BOOKS.filter((b) => b.testament === filterTestament)),
+    [filterTestament]
+  );
+  const scopeTotal = scopeBooks.reduce((s, b) => s + b.chapters, 0);
+  const scopeRead = scopeBooks.reduce((s, b) => s + (bookProgress[b.name] || 0), 0);
+  const scopePct = scopeTotal ? Math.round((scopeRead / scopeTotal) * 1000) / 10 : 0;
+  const scopeBooksCompleted = scopeBooks.filter((b) => bookProgress[b.name] >= b.chapters).length;
+  const scopeVerses = scopeBooks.reduce((s, b) => s + Math.round(((bookProgress[b.name] || 0) / b.chapters) * (BOOK_VERSES[b.name] || 0)), 0);
+  const scopeVersesTotal = scopeBooks.reduce((s, b) => s + (BOOK_VERSES[b.name] || 0), 0);
+
+  // ------------------------------ stat-card drill-down data ------------------------------
+  const chaptersReadDetail = useMemo(() => {
+    const scopeNames = new Set(scopeBooks.map((b) => b.name));
+    const map = {};
+    chapterKeys.forEach((k) => {
+      const [book, chapter] = k.split("::");
+      if (!scopeNames.has(book)) return;
+      if (!map[book]) map[book] = [];
+      map[book].push(Number(chapter));
+    });
+    Object.values(map).forEach((arr) => arr.sort((a, b) => a - b));
+    return BOOKS.filter((b) => map[b.name]).map((b) => ({ book: b.name, chapters: map[b.name] }));
+  }, [chapterKeys, scopeBooks]);
+
+  const booksCompletedDetail = useMemo(
+    () => scopeBooks.filter((b) => (bookProgress[b.name] || 0) >= b.chapters),
+    [scopeBooks, bookProgress]
+  );
+  const booksInProgressDetail = useMemo(
+    () => scopeBooks
+      .map((b) => ({ name: b.name, read: bookProgress[b.name] || 0, total: b.chapters }))
+      .filter((b) => b.read > 0 && b.read < b.total)
+      .sort((a, b) => (b.read / b.total) - (a.read / a.total))
+      .slice(0, 8),
+    [scopeBooks, bookProgress]
+  );
+
+  const versesDetail = useMemo(
+    () => scopeBooks
+      .map((b) => {
+        const read = bookProgress[b.name] || 0;
+        const est = Math.round((read / b.chapters) * (BOOK_VERSES[b.name] || 0));
+        return { name: b.name, est, total: BOOK_VERSES[b.name] || 0 };
+      })
+      .filter((x) => x.est > 0)
+      .sort((a, b) => b.est - a.est),
+    [scopeBooks, bookProgress]
+  );
+
+  // Books read more than once, scoped to the current testament filter —
+  // and whether a whole testament has ever been fully re-read (every book
+  // in it completed cover-to-cover at least twice).
+  const rereadBooksDetail = useMemo(() => {
+    const scopeNames = new Set(scopeBooks.map((b) => b.name));
+    return BOOKS
+      .filter((b) => scopeNames.has(b.name) && (bookCompletions[b.name] || 0) >= 2)
+      .map((b) => ({ name: b.name, completions: bookCompletions[b.name] || 0 }))
+      .sort((a, b) => b.completions - a.completions);
+  }, [scopeBooks, bookCompletions]);
+
+  const testamentFullyReread = useMemo(() => {
+    const map = {};
+    TESTAMENTS.forEach((t) => {
+      const booksIn = BOOKS.filter((b) => b.testament === t.key);
+      map[t.key] = booksIn.every((b) => (bookCompletions[b.name] || 0) >= 2);
+    });
+    return map;
+  }, [bookCompletions]);
+  const scopedRereadAchievements = useMemo(
+    () => (filterTestament === "all" ? TESTAMENTS : TESTAMENTS.filter((t) => t.key === filterTestament)).filter((t) => testamentFullyReread[t.key]),
+    [filterTestament, testamentFullyReread]
+  );
+
+  const scopeEventDates = useMemo(() => {
+    const scopeNames = new Set(scopeBooks.map((b) => b.name));
+    const out = [];
+    Object.entries(readings).forEach(([k, entries]) => {
+      const book = k.split("::")[0];
+      if (scopeNames.has(book)) entries.forEach((e) => out.push(e.date));
+    });
+    return out;
+  }, [readings, scopeBooks]);
+
+  const { currentStreak, longestStreak, currentStreakRange, longestStreakRange } = useMemo(() => {
+    const dates = [...new Set(scopeEventDates)].sort();
+    if (!dates.length) return { currentStreak: 0, longestStreak: 0, currentStreakRange: null, longestStreakRange: null };
+    let best = 1, cur = 1, curStart = dates[0], bestStart = dates[0], bestEnd = dates[0];
+    for (let i = 1; i < dates.length; i++) {
+      const prev = new Date(dates[i - 1] + "T00:00:00");
+      const curD = new Date(dates[i] + "T00:00:00");
+      const diff = Math.round((curD - prev) / DAY_MS);
+      if (diff === 1) { cur += 1; } else { cur = 1; curStart = dates[i]; }
+      if (cur > best) { best = cur; bestStart = curStart; bestEnd = dates[i]; }
+    }
+    const last = new Date(dates[dates.length - 1] + "T00:00:00");
+    const today = new Date(todayStr() + "T00:00:00");
+    const gap = Math.round((today - last) / DAY_MS);
+    const isActive = gap <= 1;
+    return {
+      currentStreak: isActive ? cur : 0,
+      longestStreak: best,
+      currentStreakRange: isActive ? { start: curStart, end: dates[dates.length - 1] } : null,
+      longestStreakRange: { start: bestStart, end: bestEnd },
+    };
+  }, [scopeEventDates]);
+
+  const fullTimelineData = useMemo(() => {
+    const byDate = {};
+    scopeEventDates.forEach((d) => { byDate[d] = (byDate[d] || 0) + 1; });
+    const dates = Object.keys(byDate).sort();
+    let cum = 0;
+    return dates.map((d) => {
+      cum += byDate[d];
+      return { date: d, label: fmtDateShort(d), readings: cum };
+    });
+  }, [scopeEventDates]);
+
+  const timelineData = useMemo(() => {
+    if (chartRange === "all") return fullTimelineData;
+    const days = Number(chartRange);
+    const cutoff = new Date(Date.now() - days * DAY_MS);
+    return fullTimelineData.filter((d) => new Date(d.date + "T00:00:00") >= cutoff);
+  }, [fullTimelineData, chartRange]);
+
+  const recent = useMemo(() => {
+    const scopeNames = new Set(scopeBooks.map((b) => b.name));
+    const flat = [];
+    Object.entries(readings).forEach(([k, entries]) => {
+      const [book, chapter] = k.split("::");
+      if (!scopeNames.has(book)) return;
+      entries.forEach((e) => flat.push({ book, chapter: Number(chapter), date: e.date, timesRead: entries.length }));
+    });
+    return flat.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0)).slice(0, 6);
+  }, [readings, scopeBooks]);
+
+  const paceInfo = useMemo(() => {
+    const remaining = scopeTotal - scopeRead;
+    if (scopeRead === 0) return { status: "none" };
+    if (remaining <= 0) return { status: "done" };
+    const dates = scopeBooks
+      .flatMap((b) => Array.from({ length: b.chapters }, (_, i) => firstReadDate[keyFor(b.name, i + 1)]))
+      .filter(Boolean)
+      .sort();
+    const firstDate = new Date(dates[0] + "T00:00:00");
+    const today = new Date(todayStr() + "T00:00:00");
+    const daysSinceStart = Math.max(1, Math.round((today - firstDate) / DAY_MS) + 1);
+    const lifetimePace = scopeRead / daysSinceStart;
+    const cutoff30 = new Date(today.getTime() - 30 * DAY_MS);
+    const recentCount = dates.filter((d) => new Date(d + "T00:00:00") >= cutoff30).length;
+    const recentPace = recentCount / 30;
+    const pace = recentPace > 0 ? recentPace : lifetimePace;
+    if (pace <= 0) return { status: "stalled" };
+    const estimatedDays = Math.ceil(remaining / pace);
+    const completionDate = new Date(today.getTime() + estimatedDays * DAY_MS);
+    return {
+      status: "ok", remaining, paceWeekly: Math.round(pace * 7 * 10) / 10, estimatedDays,
+      completionDate: completionDate.toISOString().slice(0, 10),
+    };
+  }, [scopeBooks, scopeTotal, scopeRead, firstReadDate, readings]);
+
+  const globalFirstDatesSorted = useMemo(() => Object.values(firstReadDate).slice().sort(), [firstReadDate]);
+  const longestStreakEver = useMemo(() => {
+    const dates = [...new Set(Object.values(readings).flat().map((e) => e.date))].sort();
+    if (!dates.length) return 0;
+    let best = 1, cur = 1;
+    for (let i = 1; i < dates.length; i++) {
+      const diff = Math.round((new Date(dates[i] + "T00:00:00") - new Date(dates[i - 1] + "T00:00:00")) / DAY_MS);
+      cur = diff === 1 ? cur + 1 : 1;
+      best = Math.max(best, cur);
+    }
+    return best;
+  }, [readings]);
+
+  const milestones = useMemo(() => {
+    const chapterMs = CHAPTER_MILESTONES.map((n) => ({
+      id: `ch-${n}`, label: n === TOTAL_CHAPTERS ? "Full Canon" : `${n} Chapters`,
+      achieved: readCount >= n, date: readCount >= n ? globalFirstDatesSorted[n - 1] : null,
+      icon: n === TOTAL_CHAPTERS ? Award : BookMarked,
+    }));
+    const streakMs = STREAK_MILESTONES.map((n) => ({
+      id: `st-${n}`, label: `${n}-Day Streak`, achieved: longestStreakEver >= n, date: null, icon: Flame,
+    }));
+    const otBooks = BOOKS.filter((b) => b.testament === "ot");
+    const ntBooks = BOOKS.filter((b) => b.testament === "nt");
+    const specialMs = [
+      { id: "first-book", label: "First Book Finished", achieved: booksCompleted >= 1, date: null, icon: Library },
+      { id: "ot-complete", label: "Old Testament Complete", achieved: otBooks.every((b) => bookProgress[b.name] >= b.chapters), date: null, icon: Award },
+      { id: "nt-complete", label: "New Testament Complete", achieved: ntBooks.every((b) => bookProgress[b.name] >= b.chapters), date: null, icon: Award },
+    ];
+    return [...chapterMs, ...specialMs, ...streakMs];
+  }, [readCount, globalFirstDatesSorted, longestStreakEver, booksCompleted, bookProgress]);
+
+  const nextMilestone = milestones.find((m) => !m.achieved);
+
+  // ------------------------------ UI atoms ------------------------------
+  const fontImport = (
+    <style>{`
+      @import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,500;0,600;0,700;1,500&family=Inter:wght@400;500;600;700&display=swap');
+      .lectio-root { font-family: 'Inter', sans-serif; }
+      .lectio-display { font-family: 'Cormorant Garamond', serif; }
+      .lectio-scroll::-webkit-scrollbar { height: 6px; width: 6px; }
+      .lectio-scroll::-webkit-scrollbar-thumb { background: ${PALETTE.goldSoft}; border-radius: 4px; }
+      .lectio-fade-in { animation: lectio-fadein .25s ease; }
+      @keyframes lectio-fadein { from { opacity: 0; transform: translateY(4px);} to { opacity: 1; transform: translateY(0);} }
+      .lectio-pill { cursor: pointer; transition: background .15s ease, color .15s ease; }
+      .lectio-card { box-shadow: 0 6px 18px rgba(0,0,0,0.28), inset 0 1px 0 rgba(255,255,255,0.03); }
+      @keyframes lectio-glow { 0%,100% { box-shadow: 0 0 0 0 rgba(217,130,43,0.55);} 50% { box-shadow: 0 0 0 4px rgba(217,130,43,0);} }
+      .lectio-reread-badge { animation: lectio-glow 2.2s ease-in-out infinite; }
+      .lectio-cell { transition: transform .12s ease, box-shadow .12s ease; }
+      .lectio-cell:hover { transform: translateY(-1px) scale(1.06); }
+      .lectio-tile:hover { transform: translateY(-2px); }
+      .lectio-tile { transition: transform .15s ease; }
+    `}</style>
+  );
+
+  const Ring = ({ pct, size = 108 }) => {
+    const stroke = 9;
+    const r = (size - stroke) / 2;
+    const c = 2 * Math.PI * r;
+    return (
+      <svg width={size} height={size} style={{ transform: "rotate(-90deg)" }}>
+        <defs>
+          <linearGradient id="ringGrad" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0%" stopColor={PALETTE.gold} />
+            <stop offset="100%" stopColor="#E8C766" />
+          </linearGradient>
+        </defs>
+        <circle cx={size / 2} cy={size / 2} r={r} stroke={PALETTE.wood} strokeWidth={stroke} fill="none" />
+        <circle
+          cx={size / 2} cy={size / 2} r={r}
+          stroke="url(#ringGrad)" strokeWidth={stroke} fill="none"
+          strokeDasharray={c} strokeDashoffset={c - (Math.min(100, pct) / 100) * c}
+          strokeLinecap="round"
+          style={{ transition: "stroke-dashoffset .6s ease" }}
+        />
+      </svg>
+    );
+  };
+
+  const PillGroup = ({ value, onChange, options }) => (
+    <div className="flex rounded-full overflow-hidden" style={{ border: `1px solid ${PALETTE.wood}` }}>
+      {options.map((o) => (
+        <button
+          key={o.value}
+          onClick={() => onChange(o.value)}
+          className="lectio-pill px-3 py-1 text-xs"
+          style={{ background: value === o.value ? PALETTE.gold : "transparent", color: value === o.value ? PALETTE.ink : PALETTE.muted, fontWeight: value === o.value ? 600 : 400 }}
+        >
+          {o.label}
+        </button>
+      ))}
+    </div>
+  );
+
+  const Card = ({ children, style, className = "" }) => (
+    <div className={`lectio-card rounded-2xl p-5 ${className}`} style={{ background: `linear-gradient(160deg, ${PALETTE.bgSoft2}, ${PALETTE.bgSoft})`, border: `1px solid ${PALETTE.wood}`, ...style }}>
+      {children}
+    </div>
+  );
+
+  const StatCard = ({ icon, label, value, sub, onClick, active }) => (
+    <div
+      onClick={onClick}
+      className="lectio-card rounded-xl p-4 flex items-center gap-3"
+      style={{
+        background: `linear-gradient(160deg, ${PALETTE.bgSoft2}, ${PALETTE.bgSoft})`,
+        border: `1px solid ${active ? PALETTE.gold : PALETTE.wood}`,
+        cursor: onClick ? "pointer" : "default",
+        boxShadow: active ? "0 0 0 1px rgba(212,175,55,0.35), 0 6px 18px rgba(0,0,0,0.28)" : undefined,
+      }}
+    >
+      <div className="rounded-lg p-2" style={{ background: PALETTE.wood }}>{icon}</div>
+      <div>
+        <div className="text-2xl font-semibold lectio-display" style={{ color: PALETTE.parchment, lineHeight: 1 }}>{value}</div>
+        <div className="text-xs mt-1" style={{ color: PALETTE.muted }}>{label}</div>
+        {sub && <div className="text-[11px] mt-0.5" style={{ color: PALETTE.gold }}>{sub}</div>}
+      </div>
+    </div>
+  );
+
+  // Amber "×N" chip — the one consistent visual signal for "read more than once"
+  const RereadChip = ({ count, size = "sm" }) => {
+    if (!count || count <= 1) return null;
+    const big = size === "lg";
+    return (
+      <span
+        className="lectio-reread-badge flex items-center gap-1 rounded-full font-bold"
+        style={{
+          background: `linear-gradient(135deg, ${PALETTE.amber}, ${PALETTE.amberDeep})`,
+          color: PALETTE.parchment,
+          padding: big ? "3px 9px" : "1px 6px",
+          fontSize: big ? 12 : 10,
+        }}
+      >
+        <Repeat size={big ? 12 : 9} /> {count}×
+      </span>
+    );
+  };
+
+  const Shelf = () => {
+    const shownTestaments = filterTestament === "all" ? TESTAMENTS : TESTAMENTS.filter((t) => t.key === filterTestament);
+    return (
+      <Card>
+        <div className="flex items-center gap-2 mb-4">
+          <Library size={16} color={PALETTE.gold} />
+          <h3 className="lectio-display text-lg" style={{ color: PALETTE.parchment }}>The Shelf</h3>
+        </div>
+        <div className="space-y-5">
+          {shownTestaments.map((t) => {
+            const booksIn = BOOKS.filter((b) => b.testament === t.key);
+            return (
+              <div key={t.key}>
+                <div className="flex items-center gap-2 mb-2 flex-wrap">
+                  <span className="w-1.5 h-1.5 rounded-full" style={{ background: t.color }} />
+                  <span className="text-[11px] uppercase tracking-wider" style={{ color: PALETTE.muted }}>{t.label}</span>
+                  {testamentReadCounts[t.key] > testamentChapterCounts[t.key] && (
+                    <span className="text-[10px]" style={{ color: PALETTE.amber }}>
+                      · {testamentReadCounts[t.key] - testamentChapterCounts[t.key]} book{testamentReadCounts[t.key] - testamentChapterCounts[t.key] === 1 ? "" : "s"} re-read
+                    </span>
+                  )}
+                </div>
+                <div className="flex items-end gap-1.5 pb-2 overflow-x-auto lectio-scroll" style={{ borderBottom: `2px solid ${PALETTE.wood}` }}>
+                  {booksIn.map((b) => {
+                    const read = bookProgress[b.name] || 0;
+                    const pct = b.chapters ? read / b.chapters : 0;
+                    const completions = bookCompletions[b.name] || 0;
+                    const hasReread = completions >= 2;
+                    const capH = 26;
+                    const fillZoneH = 62;
+                    const width = Math.max(30, Math.min(40, 28 + b.abbr.length * 2));
+                    return (
+                      <div
+                        key={b.name}
+                        title={`${b.name} — ${read}/${b.chapters} chapters (${Math.round(pct * 100)}%)${hasReread ? ` · book completed ${completions}×` : ""}`}
+                        onClick={() => { setActiveTab("books"); openBook(b); }}
+                        className="lectio-tile cursor-pointer flex-shrink-0 rounded-t-md overflow-visible relative"
+                        style={{ width, border: `1px solid ${hasReread ? PALETTE.amber : PALETTE.wood}`, boxShadow: hasReread ? "0 3px 8px rgba(217,130,43,0.35)" : "0 3px 8px rgba(0,0,0,0.3)" }}
+                      >
+                        {hasReread && (
+                          <span
+                            className="lectio-reread-badge absolute z-10 flex items-center justify-center text-[9px] font-bold rounded-full"
+                            style={{ top: -8, right: -8, minWidth: 16, height: 16, padding: "0 3px", background: `linear-gradient(135deg, ${PALETTE.amber}, ${PALETTE.amberDeep})`, color: PALETTE.parchment, border: `1.5px solid ${PALETTE.bg}` }}
+                          >
+                            {completions}
+                          </span>
+                        )}
+                        <div className="flex items-center justify-center" style={{ height: capH, background: PALETTE.parchmentSoft, borderBottom: `1px solid ${PALETTE.wood}` }}>
+                          <span className="text-[9px] font-semibold" style={{ color: PALETTE.ink }}>{b.abbr}</span>
+                        </div>
+                        <div className="relative" style={{ height: fillZoneH, background: "rgba(255,255,255,0.03)", overflow: "hidden" }}>
+                          <div style={{ position: "absolute", bottom: 0, left: 0, right: 0, height: `${pct * 100}%`, background: `linear-gradient(180deg, ${t.color}, ${t.colorDeep})`, transition: "height .5s ease" }} />
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </Card>
+    );
+  };
+
+  const MilestoneStrip = () => (
+    <Card>
+      <div className="flex items-center gap-2 mb-1">
+        <Award size={16} color={PALETTE.gold} />
+        <h3 className="lectio-display text-lg" style={{ color: PALETTE.parchment }}>Milestones</h3>
+      </div>
+      {nextMilestone && (
+        <p className="text-[11px] mb-3" style={{ color: PALETTE.muted }}>
+          Next up: <span style={{ color: PALETTE.gold }}>{nextMilestone.label}</span>
+        </p>
+      )}
+      <div className="flex gap-3 overflow-x-auto lectio-scroll pb-1">
+        {milestones.map((m) => {
+          const Icon = m.icon;
+          return (
+            <div key={m.id} title={m.date ? `Reached ${fmtDate(m.date)}` : undefined} className="flex flex-col items-center flex-shrink-0" style={{ width: 76 }}>
+              <div
+                className="rounded-full flex items-center justify-center mb-1.5"
+                style={{
+                  width: 46, height: 46,
+                  background: m.achieved ? `linear-gradient(135deg, ${PALETTE.gold}, #B98A22)` : "transparent",
+                  border: `1.5px solid ${m.achieved ? PALETTE.gold : PALETTE.inkSoft}`,
+                  boxShadow: m.achieved ? "0 0 10px rgba(212,175,55,0.35)" : "none",
+                }}
+              >
+                {m.achieved ? <Icon size={19} color={PALETTE.ink} /> : <Lock size={15} color={PALETTE.inkSoft} />}
+              </div>
+              <span className="text-[10px] text-center leading-tight" style={{ color: m.achieved ? PALETTE.parchment : PALETTE.muted }}>{m.label}</span>
+            </div>
+          );
+        })}
+      </div>
+    </Card>
+  );
+
+  const PaceCard = () => (
+    <Card>
+      <div className="flex items-center gap-2 mb-3">
+        <TrendingUp size={16} color={PALETTE.gold} />
+        <h3 className="lectio-display text-lg" style={{ color: PALETTE.parchment }}>Pace &amp; estimate</h3>
+      </div>
+      {paceInfo.status === "none" && <p className="text-sm" style={{ color: PALETTE.muted }}>Read a chapter or two to get a pace estimate.</p>}
+      {paceInfo.status === "stalled" && <p className="text-sm" style={{ color: PALETTE.muted }}>Not enough recent activity yet to project a completion date.</p>}
+      {paceInfo.status === "done" && (
+        <p className="text-sm lectio-display text-lg" style={{ color: PALETTE.gold }}>
+          {filterTestament === "all" ? "The entire canon" : testamentOf(filterTestament).label} — complete. 🎉
+        </p>
+      )}
+      {paceInfo.status === "ok" && (
+        <div className="flex flex-wrap gap-6">
+          <div>
+            <div className="text-2xl lectio-display" style={{ color: PALETTE.parchment }}>{fmtDate(paceInfo.completionDate)}</div>
+            <div className="text-xs mt-1" style={{ color: PALETTE.muted }}>estimated completion date</div>
+          </div>
+          <div>
+            <div className="text-2xl lectio-display" style={{ color: PALETTE.parchment }}>{paceInfo.paceWeekly}</div>
+            <div className="text-xs mt-1" style={{ color: PALETTE.muted }}>chapters / week (current pace)</div>
+          </div>
+          <div>
+            <div className="text-2xl lectio-display" style={{ color: PALETTE.parchment }}>{paceInfo.remaining}</div>
+            <div className="text-xs mt-1" style={{ color: PALETTE.muted }}>chapters remaining</div>
+          </div>
+        </div>
+      )}
+    </Card>
+  );
+
+  const RereadCard = () => {
+    if (!topRereadBooks.length) return null;
+    return (
+      <Card>
+        <div className="flex items-center gap-2 mb-3">
+          <Sparkles size={16} color={PALETTE.amber} />
+          <h3 className="lectio-display text-lg" style={{ color: PALETTE.parchment }}>Most re-read books</h3>
+        </div>
+        <p className="text-[11px] mb-3" style={{ color: PALETTE.muted }}>Counted only once a book has been read cover to cover more than once.</p>
+        <div className="space-y-1.5">
+          {topRereadBooks.map((b) => (
+            <button key={b.name} onClick={() => { setActiveTab("books"); openBook(BOOK_BY_NAME[b.name]); }} className="w-full flex items-center justify-between px-3 py-1.5 rounded-lg text-sm" style={{ background: PALETTE.wood, color: PALETTE.parchment }}>
+              <span>{b.name}</span>
+              <RereadChip count={b.completions} />
+            </button>
+          ))}
+        </div>
+      </Card>
+    );
+  };
+
+  // Chapter status: Not Read / Read / Read Again, plus a clear reading log
+  const StatDetailPanel = () => {
+    if (!expandedStat) return null;
+    let title = "", body = null;
+
+    if (expandedStat === "chapters") {
+      title = "Chapters read";
+      body = chaptersReadDetail.length ? (
+        <div className="space-y-3">
+          {chaptersReadDetail.map(({ book, chapters }) => (
+            <div key={book}>
+              <p className="text-xs font-semibold mb-1" style={{ color: PALETTE.parchment }}>
+                {book} <span style={{ color: PALETTE.muted, fontWeight: 400 }}>({chapters.length})</span>
+              </p>
+              <div className="flex flex-wrap gap-1">
+                {chapters.map((c) => (
+                  <button key={c} onClick={() => goToChapter(book, c)} className="text-[11px] rounded-md px-2 py-0.5" style={{ background: PALETTE.bgSoft2, color: PALETTE.parchment, border: `1px solid ${PALETTE.wood}` }}>
+                    {c}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : <p className="text-sm" style={{ color: PALETTE.muted }}>No chapters read yet in this scope.</p>;
+    }
+
+    if (expandedStat === "books") {
+      title = "Books completed";
+      body = (
+        <div className="space-y-4">
+          <div>
+            <p className="text-[11px] uppercase tracking-wider mb-2" style={{ color: PALETTE.muted }}>Completed</p>
+            {booksCompletedDetail.length ? (
+              <div className="flex flex-wrap gap-1.5">
+                {booksCompletedDetail.map((b) => (
+                  <button key={b.name} onClick={() => { setActiveTab("books"); openBook(b); }} className="text-xs rounded-full px-3 py-1 flex items-center gap-1" style={{ background: PALETTE.gold, color: PALETTE.ink }}>
+                    <CheckCircle2 size={11} /> {b.name}
+                  </button>
+                ))}
+              </div>
+            ) : <p className="text-sm" style={{ color: PALETTE.muted }}>None finished yet.</p>}
+          </div>
+          {booksInProgressDetail.length > 0 && (
+            <div>
+              <p className="text-[11px] uppercase tracking-wider mb-2" style={{ color: PALETTE.muted }}>Closest to finishing</p>
+              <div className="space-y-1.5">
+                {booksInProgressDetail.map((b) => (
+                  <button key={b.name} onClick={() => { setActiveTab("books"); openBook(BOOK_BY_NAME[b.name]); }} className="w-full flex items-center justify-between px-3 py-1.5 rounded-lg text-sm" style={{ background: PALETTE.bgSoft2, color: PALETTE.parchment }}>
+                    <span>{b.name}</span>
+                    <span style={{ color: PALETTE.gold }}>{b.read}/{b.total}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    if (expandedStat === "verses") {
+      title = "Verses read (est.) by book";
+      body = versesDetail.length ? (
+        <div className="space-y-1.5 max-h-72 overflow-y-auto lectio-scroll pr-1">
+          {versesDetail.map((v) => (
+            <button key={v.name} onClick={() => { setActiveTab("books"); openBook(BOOK_BY_NAME[v.name]); }} className="w-full flex items-center justify-between px-3 py-1.5 rounded-lg text-sm" style={{ background: PALETTE.bgSoft2, color: PALETTE.parchment }}>
+              <span>{v.name}</span>
+              <span style={{ color: PALETTE.gold }}>~{v.est.toLocaleString()} <span style={{ color: PALETTE.muted }}>/ {v.total.toLocaleString()}</span></span>
+            </button>
+          ))}
+        </div>
+      ) : <p className="text-sm" style={{ color: PALETTE.muted }}>No verses read yet in this scope.</p>;
+    }
+
+    if (expandedStat === "rereads") {
+      title = "Re-reads";
+      const achievements = TESTAMENTS.filter((t) => testamentFullyReread[t.key]);
+      body = (
+        <div className="space-y-3">
+          {achievements.length > 0 && (
+            <div className="flex flex-wrap gap-2">
+              {achievements.map((t) => (
+                <span key={t.key} className="flex items-center gap-1.5 text-xs font-semibold rounded-full px-3 py-1.5" style={{ background: `linear-gradient(135deg, ${PALETTE.gold}, #B98A22)`, color: PALETTE.ink }}>
+                  <Award size={13} /> {t.label} fully re-read
+                </span>
+              ))}
+            </div>
+          )}
+          {rereadBooksDetail.length ? (
+            <div className="space-y-1.5">
+              {rereadBooksDetail.map((b) => (
+                <button key={b.name} onClick={() => { setActiveTab("books"); openBook(BOOK_BY_NAME[b.name]); }} className="w-full flex items-center justify-between px-3 py-1.5 rounded-lg text-sm" style={{ background: PALETTE.bgSoft2, color: PALETTE.parchment }}>
+                  <span>{b.name}</span>
+                  <RereadChip count={b.completions} />
+                </button>
+              ))}
+            </div>
+          ) : (
+            <p className="text-sm" style={{ color: PALETTE.muted }}>No book has been read more than once yet — finish a book a second time to see it here.</p>
+          )}
+        </div>
+      );
+    }
+
+    if (expandedStat === "current-streak") {
+      title = "Current streak";
+      body = currentStreakRange ? (
+        <p className="text-sm" style={{ color: PALETTE.parchment }}>
+          Reading every day from <span style={{ color: PALETTE.gold }}>{fmtDate(currentStreakRange.start)}</span> through{" "}
+          <span style={{ color: PALETTE.gold }}>{fmtDate(currentStreakRange.end)}</span> — {currentStreak} day{currentStreak === 1 ? "" : "s"} and counting.
+        </p>
+      ) : <p className="text-sm" style={{ color: PALETTE.muted }}>No active streak — read today to start one.</p>;
+    }
+
+    if (expandedStat === "longest-streak") {
+      title = "Longest streak";
+      body = longestStreakRange ? (
+        <p className="text-sm" style={{ color: PALETTE.parchment }}>
+          Your best run was <span style={{ color: PALETTE.gold }}>{longestStreak} day{longestStreak === 1 ? "" : "s"}</span>, from{" "}
+          <span style={{ color: PALETTE.gold }}>{fmtDate(longestStreakRange.start)}</span> through <span style={{ color: PALETTE.gold }}>{fmtDate(longestStreakRange.end)}</span>.
+        </p>
+      ) : <p className="text-sm" style={{ color: PALETTE.muted }}>No streak yet.</p>;
+    }
+
+    return (
+      <div className="w-full lectio-fade-in rounded-xl p-4" style={{ background: PALETTE.wood, border: `1px solid ${PALETTE.goldSoft}` }}>
+        <div className="flex items-center justify-between mb-3">
+          <h4 className="lectio-display text-base" style={{ color: PALETTE.parchment }}>{title}</h4>
+          <button onClick={() => setExpandedStat(null)} className="rounded-md p-1" style={{ color: PALETTE.muted }}>
+            <X size={15} />
+          </button>
+        </div>
+        {body}
+      </div>
+    );
+  };
+
+  const DetailPanel = () => {
+    if (!selected) return null;
+    const { book, chapter } = selected;
+    const k = keyFor(book, chapter);
+    const entries = (readings[k] || []).slice().sort((a, b) => (a.date < b.date ? 1 : -1));
+    const ascEntries = entries.slice().reverse();
+
+    return (
+      <div className="lectio-fade-in rounded-2xl p-4 mb-4" style={{ background: `linear-gradient(160deg, #F6EBCF, ${PALETTE.parchment})`, border: `1px solid ${PALETTE.goldSoft}`, boxShadow: "0 8px 20px rgba(0,0,0,0.25)" }}>
+        <div className="flex items-center justify-between mb-3">
+          <div className="flex items-center gap-2">
+            <span className="lectio-display text-lg" style={{ color: PALETTE.ink }}>{book} {chapter}</span>
+            {entries.length > 1 && <RereadChip count={entries.length} size="lg" />}
+          </div>
+          <button onClick={() => setSelected(null)} className="rounded-md p-1" style={{ color: PALETTE.inkSoft }}>
+            <X size={16} />
+          </button>
+        </div>
+
+        <div className="flex rounded-full overflow-hidden mb-3" style={{ border: `1px solid ${PALETTE.inkSoft}` }}>
+          <button
+            onClick={() => clearAllEntries(book, chapter)}
+            className="flex-1 flex items-center justify-center gap-1.5 text-xs py-2"
+            style={{ background: entries.length === 0 ? PALETTE.ink : "transparent", color: entries.length === 0 ? PALETTE.parchment : PALETTE.ink }}
+          >
+            <XCircle size={13} /> Not Read
+          </button>
+          <button
+            onClick={() => entries.length === 0 && addReading(book, chapter, todayStr())}
+            disabled={entries.length > 0}
+            className="flex-1 flex items-center justify-center gap-1.5 text-xs py-2"
+            style={{
+              background: entries.length === 1 ? PALETTE.burgundy : "transparent",
+              color: entries.length === 1 ? PALETTE.parchment : PALETTE.ink,
+              borderLeft: `1px solid ${PALETTE.inkSoft}`, borderRight: `1px solid ${PALETTE.inkSoft}`,
+              cursor: entries.length > 0 ? "default" : "pointer",
+            }}
+          >
+            <CheckCircle2 size={13} /> Read
+          </button>
+          <button
+            onClick={() => entries.length >= 1 && addReading(book, chapter, todayStr())}
+            disabled={entries.length === 0}
+            className="flex-1 flex items-center justify-center gap-1.5 text-xs py-2"
+            style={{
+              background: entries.length > 1 ? `linear-gradient(135deg, ${PALETTE.amber}, ${PALETTE.amberDeep})` : "transparent",
+              color: entries.length > 1 ? PALETTE.parchment : (entries.length === 0 ? PALETTE.inkSoft : PALETTE.ink),
+              opacity: entries.length === 0 ? 0.5 : 1,
+              cursor: entries.length === 0 ? "default" : "pointer",
+            }}
+          >
+            <Repeat size={13} /> Read Again
+          </button>
+        </div>
+
+        {entries.length > 0 && (
+          <div>
+            <p className="text-[11px] uppercase tracking-wider mb-1.5" style={{ color: PALETTE.inkSoft }}>
+              {entries.length === 1 ? "Read once" : `Read ${entries.length} times`}
+            </p>
+            <div className="space-y-1.5">
+              {ascEntries.map((e, i) => (
+                <div key={e.id} className="flex items-center gap-2">
+                  <span className="text-[10px] w-7 flex-shrink-0" style={{ color: PALETTE.inkSoft }}>{ordinal(i + 1)}</span>
+                  <Calendar size={13} color={PALETTE.inkSoft} />
+                  <input
+                    type="date" value={e.date} max={todayStr()}
+                    onChange={(ev) => updateEntryDate(book, chapter, e.id, ev.target.value)}
+                    className="text-sm rounded-md px-2 py-1 outline-none"
+                    style={{ background: "#fff", border: `1px solid ${PALETTE.inkSoft}`, color: PALETTE.ink }}
+                  />
+                  <button onClick={() => removeEntry(book, chapter, e.id)} title="Delete this reading" className="rounded-md p-1.5" style={{ background: PALETTE.burgundy, color: PALETTE.parchment }}>
+                    <Trash2 size={13} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  const ChapterGrid = ({ book }) => {
+    const cells = Array.from({ length: book.chapters }, (_, i) => i + 1);
+    const t = testamentOf(book.testament);
+    return (
+      <div className="flex flex-wrap gap-2">
+        {cells.map((c) => {
+          const entries = readings[keyFor(book.name, c)] || [];
+          const isRead = entries.length > 0;
+          const isReread = entries.length > 1;
+          const isSelected = selected && selected.book === book.name && selected.chapter === c;
+          const sortedDates = isRead ? entries.slice().sort((a, b) => (a.date < b.date ? 1 : -1)).map((e) => fmtDate(e.date)) : [];
+          const tooltip = isRead
+            ? (isReread ? `Read ${entries.length}× — ${sortedDates.join(", ")}` : `Read once — ${sortedDates[0]}`)
+            : "Click to set status";
+          return (
+            <button
+              key={c}
+              onClick={() => handleCellClick(book.name, c)}
+              title={tooltip}
+              className="lectio-cell relative rounded-xl text-xs font-semibold flex items-center justify-center"
+              style={{
+                width: 34, height: 34,
+                background: isRead ? `linear-gradient(150deg, ${t.color}, ${t.colorDeep})` : "rgba(255,255,255,0.02)",
+                border: `1.5px solid ${isRead ? (isReread ? PALETTE.amber : t.color) : PALETTE.inkSoft}`,
+                color: PALETTE.parchment,
+                opacity: isRead ? 1 : 0.55,
+                boxShadow: isRead ? "0 2px 6px rgba(0,0,0,0.3)" : "none",
+                outline: isSelected ? `2px solid ${PALETTE.gold}` : "none",
+                outlineOffset: 1,
+              }}
+            >
+              {c}
+              {isReread && (
+                <span
+                  className="lectio-reread-badge absolute flex items-center justify-center text-[9px] font-bold rounded-full"
+                  style={{ top: -7, right: -7, minWidth: 16, height: 16, padding: "0 3px", background: `linear-gradient(135deg, ${PALETTE.amber}, ${PALETTE.amberDeep})`, color: PALETTE.parchment, border: `1.5px solid ${PALETTE.bg}` }}
+                >
+                  {entries.length}
+                </span>
+              )}
+            </button>
+          );
+        })}
+      </div>
+    );
+  };
+
+  const BooksTab = () => {
+    if (booksView === "testaments") {
+      return (
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 lectio-fade-in">
+          {testamentProgress.map((t) => (
+            <button
+              key={t.key}
+              onClick={() => { setBooksTestament(t.key); setBooksView("grid"); }}
+              className="lectio-tile lectio-card rounded-2xl p-6 text-left"
+              style={{ background: `linear-gradient(150deg, ${PALETTE.bgSoft2}, ${PALETTE.bgSoft})`, border: `1px solid ${PALETTE.wood}` }}
+            >
+              <div className="flex items-center justify-between mb-1">
+                <h2 className="lectio-display text-2xl" style={{ color: PALETTE.parchment }}>{t.label}</h2>
+                {t.bookPasses > t.booksDoneOnce && <RereadChip count={t.bookPasses - t.booksDoneOnce} />}
+              </div>
+              <p className="text-xs mb-3" style={{ color: PALETTE.muted }}>
+                {BOOKS.filter((b) => b.testament === t.key).length} books · {t.read}/{t.total} chapters · {t.totalReads} total reading{t.totalReads === 1 ? "" : "s"}
+              </p>
+              <div className="w-full h-2 rounded-full overflow-hidden" style={{ background: PALETTE.wood }}>
+                <div style={{ width: `${t.pct}%`, height: "100%", background: `linear-gradient(90deg, ${t.colorDeep}, ${t.color})` }} />
+              </div>
+              <span className="text-xs mt-2 inline-block" style={{ color: t.color }}>{t.pct}% read →</span>
+            </button>
+          ))}
+        </div>
+      );
+    }
+
+    if (booksView === "grid") {
+      const t = testamentOf(booksTestament);
+      const booksIn = BOOKS.filter((b) => b.testament === booksTestament);
+      return (
+        <div className="lectio-fade-in">
+          <button onClick={() => setBooksView("testaments")} className="flex items-center gap-1 text-sm mb-3" style={{ color: PALETTE.gold }}>
+            <ChevronLeft size={15} /> All testaments
+          </button>
+          <h2 className="lectio-display text-xl mb-3" style={{ color: PALETTE.parchment }}>{t.label}</h2>
+          <div className="grid gap-3" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(130px, 1fr))" }}>
+            {booksIn.map((b) => {
+              const read = bookProgress[b.name] || 0;
+              const pct = Math.round((read / b.chapters) * 100);
+              const done = read >= b.chapters;
+              const completions = bookCompletions[b.name] || 0;
+              return (
+                <button key={b.name} onClick={() => openBook(b)} className="lectio-tile lectio-card rounded-xl p-3 text-left" style={{ background: `linear-gradient(150deg, ${PALETTE.bgSoft2}, ${PALETTE.bgSoft})`, border: `1px solid ${done ? PALETTE.gold : PALETTE.wood}` }}>
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-[10px] font-semibold rounded px-1.5 py-0.5" style={{ background: PALETTE.parchmentSoft, color: PALETTE.ink }}>{b.abbr}</span>
+                    <div className="flex items-center gap-1">
+                      {completions >= 2 && <RereadChip count={completions} />}
+                      {done && <CheckCircle2 size={14} color={PALETTE.gold} />}
+                    </div>
+                  </div>
+                  <div className="lectio-display text-sm mb-2" style={{ color: PALETTE.parchment, lineHeight: 1.15 }}>{b.name}</div>
+                  <div className="w-full h-1.5 rounded-full overflow-hidden mb-1" style={{ background: PALETTE.wood }}>
+                    <div style={{ width: `${pct}%`, height: "100%", background: `linear-gradient(90deg, ${t.colorDeep}, ${t.color})` }} />
+                  </div>
+                  <span className="text-[10px]" style={{ color: PALETTE.muted }}>{read}/{b.chapters} chapters</span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      );
+    }
+
+    const book = BOOK_BY_NAME[booksSelectedBook];
+    if (!book) return null;
+    const read = bookProgress[book.name] || 0;
+    const completions = bookCompletions[book.name] || 0;
+    return (
+      <div className="lectio-fade-in">
+        <div className="flex items-center gap-1 text-sm mb-3" style={{ color: PALETTE.gold }}>
+          <button onClick={() => { setBooksView("testaments"); setSelected(null); }} className="flex items-center gap-1">{testamentOf(book.testament).label}</button>
+          <ChevronRight size={13} color={PALETTE.muted} />
+          <button onClick={() => { setBooksView("grid"); setSelected(null); }}>All books</button>
+        </div>
+        <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
+          <h2 className="lectio-display text-2xl" style={{ color: PALETTE.parchment }}>{book.name}</h2>
+          <span className="text-sm flex items-center gap-2" style={{ color: PALETTE.muted }}>
+            {read}/{book.chapters} chapters read
+            {completions >= 2 && <RereadChip count={completions} />}
+          </span>
+        </div>
+        {selected && selected.book === book.name && <DetailPanel />}
+        <Card>
+          <ChapterGrid book={book} />
+        </Card>
+      </div>
+    );
+  };
+
+  if (!loaded) {
+    return (
+      <div className="lectio-root flex items-center justify-center p-10" style={{ background: PALETTE.bg, minHeight: 300 }}>
+        {fontImport}
+        <span className="lectio-display text-lg" style={{ color: PALETTE.parchment }}>Opening the shelf…</span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="lectio-root" style={{ background: `radial-gradient(circle at 20% 0%, ${PALETTE.bgSoft2}, ${PALETTE.bg} 60%)`, minHeight: "100%", padding: 20 }}>
+      {fontImport}
+      <div style={{ maxWidth: 920, margin: "0 auto" }}>
+        <div className="flex items-center justify-between mb-6 flex-wrap gap-3">
+          <div className="flex items-center gap-2">
+            <BookMarked size={22} color={PALETTE.gold} />
+            <h1 className="lectio-display text-3xl" style={{ color: PALETTE.parchment }}>Lectio</h1>
+          </div>
+          <div className="flex rounded-full overflow-hidden" style={{ border: `1px solid ${PALETTE.wood}` }}>
+            {["dashboard", "books"].map((tb) => (
+              <button key={tb} onClick={() => setActiveTab(tb)} className="lectio-pill px-4 py-1.5 text-sm capitalize" style={{ background: activeTab === tb ? PALETTE.gold : "transparent", color: activeTab === tb ? PALETTE.ink : PALETTE.muted, fontWeight: activeTab === tb ? 600 : 400 }}>
+                {tb}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {activeTab === "dashboard" && (
+          <div className="space-y-5 lectio-fade-in">
+            <div className="flex flex-wrap items-center gap-3 rounded-xl p-3" style={{ background: PALETTE.bgSoft, border: `1px solid ${PALETTE.wood}` }}>
+              <span className="text-[11px] uppercase tracking-wider" style={{ color: PALETTE.muted }}>Testament</span>
+              <PillGroup value={filterTestament} onChange={setFilterTestament} options={[{ value: "all", label: "All" }, { value: "ot", label: "Old" }, { value: "nt", label: "New" }]} />
+              <span className="text-[11px] uppercase tracking-wider ml-2" style={{ color: PALETTE.muted }}>Chart range</span>
+              <PillGroup value={chartRange} onChange={setChartRange} options={[{ value: "30", label: "30d" }, { value: "90", label: "90d" }, { value: "365", label: "1y" }, { value: "all", label: "All" }]} />
+            </div>
+
+            <Card className="flex flex-wrap items-center gap-6">
+              <div className="relative flex items-center justify-center">
+                <Ring pct={scopePct} />
+                <div className="absolute flex flex-col items-center">
+                  <span className="lectio-display text-2xl" style={{ color: PALETTE.parchment }}>{scopePct}%</span>
+                  <span className="text-[10px]" style={{ color: PALETTE.muted }}>{filterTestament === "all" ? "of canon" : testamentOf(filterTestament).label}</span>
+                </div>
+              </div>
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 flex-1 min-w-[280px]">
+                <StatCard icon={<CheckCircle2 size={16} color={PALETTE.gold} />} label="Chapters read" value={`${scopeRead} / ${scopeTotal}`} active={expandedStat === "chapters"} onClick={() => setExpandedStat((s) => (s === "chapters" ? null : "chapters"))} />
+                <StatCard icon={<Library size={16} color={PALETTE.gold} />} label="Books completed" value={`${scopeBooksCompleted} / ${scopeBooks.length}`} active={expandedStat === "books"} onClick={() => setExpandedStat((s) => (s === "books" ? null : "books"))} />
+                <StatCard icon={<ListChecks size={16} color={PALETTE.gold} />} label="Verses read (est.)" value={scopeVerses.toLocaleString()} sub={`of ~${scopeVersesTotal.toLocaleString()}`} active={expandedStat === "verses"} onClick={() => setExpandedStat((s) => (s === "verses" ? null : "verses"))} />
+                <StatCard icon={<Repeat size={16} color={PALETTE.amber} />} label="Re-reads" value={rereadBooksDetail.length} sub={scopedRereadAchievements.length ? `🏆 ${scopedRereadAchievements.map((t) => t.label).join(" & ")} fully re-read` : undefined} active={expandedStat === "rereads"} onClick={() => setExpandedStat((s) => (s === "rereads" ? null : "rereads"))} />
+                <StatCard icon={<Flame size={16} color={PALETTE.gold} />} label="Current streak" value={`${currentStreak}d`} active={expandedStat === "current-streak"} onClick={() => setExpandedStat((s) => (s === "current-streak" ? null : "current-streak"))} />
+                <StatCard icon={<Flame size={16} color={PALETTE.goldSoft} />} label="Longest streak" value={`${longestStreak}d`} active={expandedStat === "longest-streak"} onClick={() => setExpandedStat((s) => (s === "longest-streak" ? null : "longest-streak"))} />
+              </div>
+              <StatDetailPanel />
+            </Card>
+
+            <PaceCard />
+            <MilestoneStrip />
+            <RereadCard />
+
+            <Card>
+              <h3 className="lectio-display text-lg mb-3" style={{ color: PALETTE.parchment }}>Readings logged over time</h3>
+              {fullTimelineData.length > 1 ? (
+                <ResponsiveContainer width="100%" height={200}>
+                  <AreaChart data={timelineData}>
+                    <defs>
+                      <linearGradient id="lectioGold" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0%" stopColor={PALETTE.gold} stopOpacity={0.55} />
+                        <stop offset="100%" stopColor={PALETTE.gold} stopOpacity={0.03} />
+                      </linearGradient>
+                    </defs>
+                    <CartesianGrid stroke={PALETTE.wood} vertical={false} />
+                    <XAxis dataKey="label" tick={{ fill: PALETTE.muted, fontSize: 11 }} axisLine={{ stroke: PALETTE.wood }} tickLine={false} minTickGap={30} />
+                    <YAxis tick={{ fill: PALETTE.muted, fontSize: 11 }} axisLine={false} tickLine={false} width={30} />
+                    <Tooltip contentStyle={{ background: PALETTE.parchment, border: `1px solid ${PALETTE.goldSoft}`, borderRadius: 8, fontSize: 12 }} labelStyle={{ color: PALETTE.ink, fontWeight: 600 }} formatter={(v) => [v, "Cumulative readings"]} />
+                    <Area type="monotone" dataKey="readings" stroke={PALETTE.gold} strokeWidth={2} fill="url(#lectioGold)" />
+                  </AreaChart>
+                </ResponsiveContainer>
+              ) : (
+                <div className="text-sm py-8 text-center" style={{ color: PALETTE.muted }}>Mark a few chapters read to see your progress line take shape.</div>
+              )}
+              <p className="text-[11px] mt-2" style={{ color: PALETTE.muted }}>Counts every reading you log — including re-reads — within the selected testament and range.</p>
+            </Card>
+
+            <Card>
+              <h3 className="lectio-display text-lg mb-3" style={{ color: PALETTE.parchment }}>Progress by testament</h3>
+              <ResponsiveContainer width="100%" height={140}>
+                <BarChart data={testamentProgress} layout="vertical" margin={{ left: 10, right: 20 }}>
+                  <CartesianGrid stroke={PALETTE.wood} horizontal={false} />
+                  <XAxis type="number" domain={[0, 100]} tick={{ fill: PALETTE.muted, fontSize: 11 }} axisLine={{ stroke: PALETTE.wood }} tickLine={false} unit="%" />
+                  <YAxis type="category" dataKey="label" tick={{ fill: PALETTE.muted, fontSize: 12 }} axisLine={false} tickLine={false} width={110} />
+                  <Tooltip contentStyle={{ background: PALETTE.parchment, border: `1px solid ${PALETTE.goldSoft}`, borderRadius: 8, fontSize: 12 }} labelStyle={{ color: PALETTE.ink, fontWeight: 600 }} formatter={(v, n, p) => [`${p.payload.read}/${p.payload.total} chapters · ${p.payload.totalReads} total readings`, "Read"]} />
+                  <Bar dataKey="pct" radius={[0, 4, 4, 0]} barSize={28}>
+                    {testamentProgress.map((t) => <RCell key={t.key} fill={t.color} opacity={filterTestament === "all" || filterTestament === t.key ? 1 : 0.3} />)}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+              <div className="flex flex-wrap gap-4 mt-2">
+                {testamentProgress.map((t) => (
+                  <div key={t.key} className="text-[11px]" style={{ color: PALETTE.muted }}>
+                    <span style={{ color: PALETTE.parchment, fontWeight: 600 }}>{t.label}:</span> {t.read}/{t.total} chapters
+                    {t.bookPasses > t.booksDoneOnce && (
+                      <span style={{ color: PALETTE.amber }}> · {t.bookPasses - t.booksDoneOnce} book{t.bookPasses - t.booksDoneOnce === 1 ? "" : "s"} re-read</span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </Card>
+
+            <Shelf />
+
+            {recent.length > 0 && (
+              <Card>
+                <h3 className="lectio-display text-lg mb-3" style={{ color: PALETTE.parchment }}>Recent readings</h3>
+                <div className="space-y-1">
+                  {recent.map((r, i) => (
+                    <button key={`${r.book}-${r.chapter}-${r.date}-${i}`} onClick={() => goToChapter(r.book, r.chapter)} className="w-full flex items-center justify-between px-3 py-2 rounded-lg text-sm" style={{ background: PALETTE.wood, color: PALETTE.parchment }}>
+                      <span className="flex items-center gap-2">
+                        {r.book} {r.chapter}
+                        <RereadChip count={r.timesRead} />
+                      </span>
+                      <span style={{ color: PALETTE.gold }}>{fmtDate(r.date)}</span>
+                    </button>
+                  ))}
+                </div>
+              </Card>
+            )}
+          </div>
+        )}
+
+        {activeTab === "books" && <BooksTab />}
+
+        <div className="flex flex-col items-center gap-2 pt-6 pb-2">
+          <div className="flex items-center gap-2">
+            <button
+              onClick={exportData}
+              className="text-xs rounded-md px-3 py-1.5 flex items-center gap-1.5"
+              style={{ background: PALETTE.wood, color: PALETTE.parchment, border: `1px solid ${PALETTE.goldSoft}` }}
+            >
+              <Download size={13} /> Backup data
+            </button>
+            <button
+              onClick={() => importInputRef.current && importInputRef.current.click()}
+              className="text-xs rounded-md px-3 py-1.5 flex items-center gap-1.5"
+              style={{ background: PALETTE.wood, color: PALETTE.parchment, border: `1px solid ${PALETTE.goldSoft}` }}
+            >
+              <Upload size={13} /> Restore backup
+            </button>
+            <input
+              ref={importInputRef}
+              type="file"
+              accept="application/json"
+              className="hidden"
+              onChange={(e) => { const f = e.target.files && e.target.files[0]; if (f) importData(f); e.target.value = ""; }}
+            />
+          </div>
+          <div className="text-center text-[11px]" style={{ color: PALETTE.wood }}>
+            {saveState === "saving" ? "Saving…" : saveState === "error" ? "Couldn't save — your browser may be blocking local storage." : "Your reading log is saved on this device. Back it up regularly so you never lose it."}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const root = ReactDOM.createRoot(document.getElementById("root"));
+root.render(<LectioTracker />);
+
+</script>
+</body>
+</html>
