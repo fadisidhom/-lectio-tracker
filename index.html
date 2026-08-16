@@ -114,6 +114,31 @@ const ordinal = (n) => {
 };
 const makeId = () => `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 
+// Arabic names for all 73 books of the Catholic canon — a display-only
+// layer. Every reading is still stored and keyed by the English name
+// above, so switching languages never touches your saved data.
+const ARABIC_BOOK_NAMES = {
+  "Genesis": "التكوين", "Exodus": "الخروج", "Leviticus": "اللاويين", "Numbers": "العدد",
+  "Deuteronomy": "التثنية", "Joshua": "يشوع", "Judges": "القضاة", "Ruth": "راعوث",
+  "1 Samuel": "صموئيل الأول", "2 Samuel": "صموئيل الثاني", "1 Kings": "الملوك الأول", "2 Kings": "الملوك الثاني",
+  "1 Chronicles": "أخبار الأيام الأول", "2 Chronicles": "أخبار الأيام الثاني", "Ezra": "عزرا", "Nehemiah": "نحميا",
+  "Tobit": "طوبيا", "Judith": "يهوديت", "Esther": "أستير", "1 Maccabees": "المكابيين الأول",
+  "2 Maccabees": "المكابيين الثاني", "Job": "أيوب", "Psalms": "المزامير", "Proverbs": "الأمثال",
+  "Ecclesiastes": "الجامعة", "Song of Songs": "نشيد الأنشاد", "Wisdom": "الحكمة", "Sirach": "يشوع بن سيراخ",
+  "Isaiah": "إشعياء", "Jeremiah": "إرميا", "Lamentations": "مراثي إرميا", "Baruch": "باروخ",
+  "Ezekiel": "حزقيال", "Daniel": "دانيال", "Hosea": "هوشع", "Joel": "يوئيل",
+  "Amos": "عاموس", "Obadiah": "عوبديا", "Jonah": "يونان", "Micah": "ميخا",
+  "Nahum": "ناحوم", "Habakkuk": "حبقوق", "Zephaniah": "صفنيا", "Haggai": "حجَّي",
+  "Zechariah": "زكريا", "Malachi": "ملاخي",
+  "Matthew": "متى", "Mark": "مرقس", "Luke": "لوقا", "John": "يوحنا",
+  "Acts": "أعمال الرسل", "Romans": "رومية", "1 Corinthians": "كورنثوس الأولى", "2 Corinthians": "كورنثوس الثانية",
+  "Galatians": "غلاطية", "Ephesians": "أفسس", "Philippians": "فيلبي", "Colossians": "كولوسي",
+  "1 Thessalonians": "تسالونيكي الأولى", "2 Thessalonians": "تسالونيكي الثانية", "1 Timothy": "تيموثاوس الأولى", "2 Timothy": "تيموثاوس الثانية",
+  "Titus": "تيطس", "Philemon": "فليمون", "Hebrews": "العبرانيين", "James": "يعقوب",
+  "1 Peter": "بطرس الأولى", "2 Peter": "بطرس الثانية", "1 John": "يوحنا الأولى", "2 John": "يوحنا الثانية",
+  "3 John": "يوحنا الثالثة", "Jude": "يهوذا", "Revelation": "الرؤيا",
+};
+
 // Total verses per book — sourced for the 66-book portion; the 7
 // deuterocanonical books are reasonable estimates since standard tallies
 // don't cover them. Used only to estimate a "verses read" total.
@@ -137,7 +162,8 @@ const BOOK_VERSES = {
 const TOTAL_VERSES = Object.values(BOOK_VERSES).reduce((a, v) => a + v, 0);
 
 const STORAGE_KEY = "lectio-readings-v2";
-const DATA_VERSION = 1; // bump this whenever the saved-data shape changes, and add a case to migrateData()
+const DATA_VERSION = 2; // bump this whenever the saved-data shape changes, and add a case to migrateData()
+const PROFILE_COLORS = [PALETTE.gold, PALETTE.amber, PALETTE.burgundy, PALETTE.slate, "#4E7C59", "#6B4E8C"];
 
 // Upgrades older saved payloads to the current shape. Add a new "if (data.dataVersion < N)"
 // block here whenever a future change alters how data is stored, so nobody's history is lost.
@@ -148,41 +174,64 @@ function migrateData(raw) {
     data = { dataVersion: 0, readings: raw && typeof raw === "object" ? raw : {} };
   }
   if (typeof data.dataVersion !== "number") data.dataVersion = 0;
-  // if (data.dataVersion < 2) { ...convert v1 shape to v2 shape here... data.dataVersion = 2; }
-  return { readings: data.readings || {}, dataVersion: DATA_VERSION };
+
+  // v0/v1 (pre-profiles): a single flat `readings` map — wrap it into one profile
+  // so nobody's existing history disappears when profiles are introduced.
+  if (data.dataVersion < 2) {
+    const legacyReadings = data.readings || {};
+    const hasLegacyData = Object.keys(legacyReadings).length > 0;
+    const id = "legacy";
+    data = {
+      dataVersion: 2,
+      profiles: hasLegacyData ? [{ id, name: "My Reading", color: PROFILE_COLORS[0] }] : [],
+      profileData: hasLegacyData ? { [id]: { readings: legacyReadings } } : {},
+    };
+  }
+
+  const profiles = Array.isArray(data.profiles) ? data.profiles : [];
+  const profileData = data.profileData && typeof data.profileData === "object" ? { ...data.profileData } : {};
+  profiles.forEach((p) => { if (!profileData[p.id]) profileData[p.id] = { readings: {} }; });
+  return { dataVersion: DATA_VERSION, profiles, profileData };
 }
 
-function loadFromLocalStorage() {
+function loadAppData() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return {};
-    const parsed = JSON.parse(raw);
-    return migrateData(parsed).readings;
+    if (!raw) return { profiles: [], profileData: {} };
+    return migrateData(JSON.parse(raw));
   } catch (e) {
-    return {};
+    return { profiles: [], profileData: {} };
   }
 }
 
-function saveToLocalStorage(readings) {
+function saveAppData(profiles, profileData) {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({ dataVersion: DATA_VERSION, readings }));
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ dataVersion: DATA_VERSION, profiles, profileData }));
     return true;
   } catch (e) {
     return false;
   }
 }
 
-const CHAPTER_MILESTONES = [1, 10, 25, 50, 100, 250, 500, 750, 1000]
-  .filter((n) => n < TOTAL_CHAPTERS)
-  .concat([TOTAL_CHAPTERS]);
-const STREAK_MILESTONES = [3, 7, 14, 30, 100];
+const TOTAL_BOOKS = BOOKS.length;
+const BOOK_MILESTONES = [1, 5, 10, 25, 50, TOTAL_BOOKS].filter((n, i, arr) => n <= TOTAL_BOOKS && arr.indexOf(n) === i);
+const STREAK_MILESTONES = [3, 7, 14, 30, 100, 365];
 
 export default function LectioTracker() {
-  // readings: { "Book::Chapter": [{ id, date }, ...] }  — multiple entries = re-reads
-  const [readings, setReadings] = useState({});
+  // profileData: { [profileId]: { readings: { "Book::Chapter": [{id,date}], ... } } }
+  const [profiles, setProfiles] = useState([]);
+  const [profileData, setProfileData] = useState({});
+  const [activeProfileId, setActiveProfileId] = useState(null);
+  const readings = (activeProfileId && profileData[activeProfileId] && profileData[activeProfileId].readings) || {};
+
   const [loaded, setLoaded] = useState(false);
   const [activeTab, setActiveTab] = useState("books");
   const [saveState, setSaveState] = useState("idle");
+  const [lang, setLang] = useState("en"); // "en" | "ar" — display-only; storage is always keyed by English names
+
+  const t = (en, ar) => (lang === "ar" ? ar : en);
+  const bookLabel = (name) => (lang === "ar" ? (ARABIC_BOOK_NAMES[name] || name) : name);
+  const testamentLabel = (key) => t(testamentOf(key).label, key === "ot" ? "العهد القديم" : "العهد الجديد");
 
   const [filterTestament, setFilterTestament] = useState("all");
   const [historyGranularity, setHistoryGranularity] = useState("month"); // "year" | "month"
@@ -195,18 +244,60 @@ export default function LectioTracker() {
   const [expandedStat, setExpandedStat] = useState(null);
 
   useEffect(() => {
-    setReadings(loadFromLocalStorage());
+    const data = loadAppData();
+    setProfiles(data.profiles);
+    setProfileData(data.profileData);
+    setActiveProfileId(null); // always land on the profile picker on a fresh load
     setLoaded(true);
   }, []);
 
-  const persist = useCallback((next) => {
+  const persist = useCallback((nextProfiles, nextProfileData) => {
     setSaveState("saving");
-    const ok = saveToLocalStorage(next);
+    const ok = saveAppData(nextProfiles, nextProfileData);
     setSaveState(ok ? "idle" : "error");
   }, []);
 
+  const addProfile = (name) => {
+    const id = makeId();
+    setProfiles((prev) => {
+      const nextProfiles = [...prev, { id, name, color: PROFILE_COLORS[prev.length % PROFILE_COLORS.length] }];
+      setProfileData((prevData) => {
+        const nextData = { ...prevData, [id]: { readings: {} } };
+        persist(nextProfiles, nextData);
+        return nextData;
+      });
+      return nextProfiles;
+    });
+    return id;
+  };
+
+  const renameProfile = (id, name) => {
+    setProfiles((prev) => {
+      const nextProfiles = prev.map((p) => (p.id === id ? { ...p, name } : p));
+      persist(nextProfiles, profileData);
+      return nextProfiles;
+    });
+  };
+
+  const deleteProfile = (id) => {
+    setProfiles((prev) => {
+      const nextProfiles = prev.filter((p) => p.id !== id);
+      setProfileData((prevData) => {
+        const nextData = { ...prevData };
+        delete nextData[id];
+        persist(nextProfiles, nextData);
+        return nextData;
+      });
+      return nextProfiles;
+    });
+    setActiveProfileId((prev) => (prev === id ? null : prev));
+  };
+
+  const selectProfile = (id) => setActiveProfileId(id);
+  const switchProfile = () => { setActiveProfileId(null); setActiveTab("books"); setBooksView("testaments"); setSelected(null); setExpandedStat(null); };
+
   const exportData = () => {
-    const payload = JSON.stringify({ dataVersion: DATA_VERSION, readings, exportedAt: new Date().toISOString() }, null, 2);
+    const payload = JSON.stringify({ dataVersion: DATA_VERSION, profiles, profileData, exportedAt: new Date().toISOString() }, null, 2);
     const blob = new Blob([payload], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -224,9 +315,11 @@ export default function LectioTracker() {
     reader.onload = (e) => {
       try {
         const parsed = JSON.parse(e.target.result);
-        const { readings: imported } = migrateData(parsed);
-        setReadings(imported);
-        persist(imported);
+        const imported = migrateData(parsed);
+        setProfiles(imported.profiles);
+        setProfileData(imported.profileData);
+        setActiveProfileId(null);
+        persist(imported.profiles, imported.profileData);
         setSaveState("idle");
       } catch (err) {
         window.alert("That file couldn't be read — make sure it's a Lectio backup .json file.");
@@ -238,43 +331,48 @@ export default function LectioTracker() {
 
   const keyFor = (book, chapter) => `${book}::${chapter}`;
 
+  const updateReadings = (updater) => {
+    if (!activeProfileId) return;
+    setProfileData((prev) => {
+      const currentReadings = (prev[activeProfileId] && prev[activeProfileId].readings) || {};
+      const nextReadings = updater(currentReadings);
+      const next = { ...prev, [activeProfileId]: { readings: nextReadings } };
+      persist(profiles, next);
+      return next;
+    });
+  };
+
   const addReading = (book, chapter, date) => {
-    setReadings((prev) => {
+    updateReadings((prev) => {
       const k = keyFor(book, chapter);
       const entries = prev[k] ? [...prev[k]] : [];
       entries.push({ id: makeId(), date });
-      const next = { ...prev, [k]: entries };
-      persist(next);
-      return next;
+      return { ...prev, [k]: entries };
     });
   };
 
   const updateEntryDate = (book, chapter, id, date) => {
-    setReadings((prev) => {
+    updateReadings((prev) => {
       const k = keyFor(book, chapter);
       const entries = (prev[k] || []).map((e) => (e.id === id ? { ...e, date } : e));
-      const next = { ...prev, [k]: entries };
-      persist(next);
-      return next;
+      return { ...prev, [k]: entries };
     });
   };
 
   const removeEntry = (book, chapter, id) => {
-    setReadings((prev) => {
+    updateReadings((prev) => {
       const k = keyFor(book, chapter);
       const entries = (prev[k] || []).filter((e) => e.id !== id);
       const next = { ...prev };
       if (entries.length) next[k] = entries; else delete next[k];
-      persist(next);
       return next;
     });
   };
 
   const clearAllEntries = (book, chapter) => {
-    setReadings((prev) => {
+    updateReadings((prev) => {
       const next = { ...prev };
       delete next[keyFor(book, chapter)];
-      persist(next);
       return next;
     });
   };
@@ -344,7 +442,6 @@ export default function LectioTracker() {
     return map;
   }, [readings]);
 
-  const readCount = chapterKeys.length;
   const booksCompleted = BOOKS.filter((b) => bookProgress[b.name] >= b.chapters).length;
 
   const versesReadEstimate = useMemo(
@@ -353,16 +450,16 @@ export default function LectioTracker() {
   );
 
   const testamentProgress = useMemo(() => {
-    return TESTAMENTS.map((t) => {
-      const booksIn = BOOKS.filter((b) => b.testament === t.key);
+    return TESTAMENTS.map((tst) => {
+      const booksIn = BOOKS.filter((b) => b.testament === tst.key);
       const total = booksIn.reduce((s, b) => s + b.chapters, 0);
       const read = booksIn.reduce((s, b) => s + (bookProgress[b.name] || 0), 0);
       const totalReads = booksIn.reduce((s, b) => s + (bookTotalReadings[b.name] || 0), 0);
       const bookPasses = booksIn.reduce((s, b) => s + (bookCompletions[b.name] || 0), 0);
       const booksDoneOnce = booksIn.filter((b) => (bookCompletions[b.name] || 0) >= 1).length;
-      return { ...t, total, read, pct: total ? Math.round((read / total) * 100) : 0, totalReads, bookPasses, booksDoneOnce };
+      return { ...tst, label: testamentLabel(tst.key), total, read, pct: total ? Math.round((read / total) * 100) : 0, totalReads, bookPasses, booksDoneOnce };
     });
-  }, [bookProgress, bookTotalReadings, bookCompletions]);
+  }, [bookProgress, bookTotalReadings, bookCompletions, lang]);
 
   // Quick lookup maps for the "N book(s) re-read" labels at the testament level —
   // sourced from whole-book completions, not chapter-level entry counts.
@@ -582,13 +679,13 @@ export default function LectioTracker() {
       const names = historyBooksByPeriod[period] || [];
       return (
         <div style={{ background: PALETTE.parchment, border: `1px solid ${PALETTE.goldSoft}`, borderRadius: 8, padding: "8px 10px", fontSize: 12, maxWidth: 220 }}>
-          {names.length ? names.map((n) => <div key={n} style={{ color: PALETTE.ink }}>{n}</div>) : <div style={{ color: PALETTE.ink }}>No books finished</div>}
+          {names.length ? names.map((n) => <div key={n} style={{ color: PALETTE.ink }}>{bookLabel(n)}</div>) : <div style={{ color: PALETTE.ink }}>{t("No books finished", "لم يكتمل أي سفر")}</div>}
         </div>
       );
     }
     return (
       <div style={{ background: PALETTE.parchment, border: `1px solid ${PALETTE.goldSoft}`, borderRadius: 8, padding: "8px 10px", fontSize: 12 }}>
-        <div style={{ color: PALETTE.ink }}>{payload[0].value} chapter{payload[0].value === 1 ? "" : "s"} read</div>
+        <div style={{ color: PALETTE.ink }}>{t(`${payload[0].value} chapter${payload[0].value === 1 ? "" : "s"} read`, `${payload[0].value} إصحاحًا مقروءًا`)}</div>
       </div>
     );
   };
@@ -629,7 +726,6 @@ export default function LectioTracker() {
     };
   }, [scopeBooks, scopeTotal, scopeRead, firstReadDate, readings]);
 
-  const globalFirstDatesSorted = useMemo(() => Object.values(firstReadDate).slice().sort(), [firstReadDate]);
   const longestStreakEver = useMemo(() => {
     const dates = [...new Set(Object.values(readings).flat().map((e) => e.date))].sort();
     if (!dates.length) return 0;
@@ -642,33 +738,36 @@ export default function LectioTracker() {
     return best;
   }, [readings]);
 
+  const sortedBookCompletionDates = useMemo(() => Object.values(bookCompletionDate).slice().sort(), [bookCompletionDate]);
+
   const milestones = useMemo(() => {
-    const chapterMs = CHAPTER_MILESTONES.map((n) => ({
-      id: `ch-${n}`, label: n === TOTAL_CHAPTERS ? "Full Canon" : `${n} Chapters`,
-      achieved: readCount >= n, date: readCount >= n ? globalFirstDatesSorted[n - 1] : null,
-      icon: n === TOTAL_CHAPTERS ? Award : BookMarked,
+    const bookMs = BOOK_MILESTONES.map((n) => ({
+      id: `bk-${n}`, label: n === TOTAL_BOOKS ? t("Full Canon", "الكتاب المقدس كاملاً") : t(`${n} Book${n === 1 ? "" : "s"}`, `${n} سفرًا`),
+      achieved: booksCompleted >= n, date: booksCompleted >= n ? sortedBookCompletionDates[n - 1] : null,
+      icon: n === TOTAL_BOOKS ? Award : Library,
     }));
     const streakMs = STREAK_MILESTONES.map((n) => ({
-      id: `st-${n}`, label: `${n}-Day Streak`, achieved: longestStreakEver >= n, date: null, icon: Flame,
+      id: `st-${n}`, label: t(`${n}-Day Streak`, `سلسلة ${n} يومًا`), achieved: longestStreakEver >= n, date: null, icon: Flame,
     }));
     const otBooks = BOOKS.filter((b) => b.testament === "ot");
     const ntBooks = BOOKS.filter((b) => b.testament === "nt");
     const specialMs = [
-      { id: "first-book", label: "First Book Finished", achieved: booksCompleted >= 1, date: null, icon: Library },
-      { id: "ot-complete", label: "Old Testament Complete", achieved: otBooks.every((b) => bookProgress[b.name] >= b.chapters), date: null, icon: Award },
-      { id: "nt-complete", label: "New Testament Complete", achieved: ntBooks.every((b) => bookProgress[b.name] >= b.chapters), date: null, icon: Award },
+      { id: "ot-complete", label: t("Old Testament Complete", "اكتمل العهد القديم"), achieved: otBooks.every((b) => bookProgress[b.name] >= b.chapters), date: null, icon: Award },
+      { id: "nt-complete", label: t("New Testament Complete", "اكتمل العهد الجديد"), achieved: ntBooks.every((b) => bookProgress[b.name] >= b.chapters), date: null, icon: Award },
     ];
-    return [...chapterMs, ...specialMs, ...streakMs];
-  }, [readCount, globalFirstDatesSorted, longestStreakEver, booksCompleted, bookProgress]);
+    return [...bookMs, ...specialMs, ...streakMs];
+  }, [booksCompleted, sortedBookCompletionDates, longestStreakEver, bookProgress, lang]);
 
   const nextMilestone = milestones.find((m) => !m.achieved);
 
   // ------------------------------ UI atoms ------------------------------
   const fontImport = (
     <style>{`
-      @import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,500;0,600;0,700;1,500&family=Inter:wght@400;500;600;700&display=swap');
+      @import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,500;0,600;0,700;1,500&family=Inter:wght@400;500;600;700&family=Amiri:ital,wght@0,400;0,700;1,400&family=Cairo:wght@400;500;600;700&display=swap');
       .lectio-root { font-family: 'Inter', sans-serif; }
       .lectio-display { font-family: 'Cormorant Garamond', serif; }
+      .lectio-ar { font-family: 'Cairo', sans-serif; }
+      .lectio-ar .lectio-display { font-family: 'Amiri', serif; }
       .lectio-scroll::-webkit-scrollbar { height: 6px; width: 6px; }
       .lectio-scroll::-webkit-scrollbar-thumb { background: ${PALETTE.goldSoft}; border-radius: 4px; }
       .lectio-fade-in { animation: lectio-fadein .25s ease; }
@@ -681,6 +780,7 @@ export default function LectioTracker() {
       .lectio-cell:hover { transform: translateY(-1px) scale(1.06); }
       .lectio-tile:hover { transform: translateY(-2px); }
       .lectio-tile { transition: transform .15s ease; }
+      .lectio-ar input[type="date"] { direction: ltr; text-align: right; }
     `}</style>
   );
 
@@ -774,19 +874,22 @@ export default function LectioTracker() {
       <Card>
         <div className="flex items-center gap-2 mb-4">
           <Library size={16} color={PALETTE.gold} />
-          <h3 className="lectio-display text-lg" style={{ color: PALETTE.parchment }}>The Shelf</h3>
+          <h3 className="lectio-display text-lg" style={{ color: PALETTE.parchment }}>{t("The Shelf", "الرف")}</h3>
         </div>
         <div className="space-y-5">
-          {shownTestaments.map((t) => {
-            const booksIn = BOOKS.filter((b) => b.testament === t.key);
+          {shownTestaments.map((tst) => {
+            const booksIn = BOOKS.filter((b) => b.testament === tst.key);
             return (
-              <div key={t.key}>
+              <div key={tst.key}>
                 <div className="flex items-center gap-2 mb-2 flex-wrap">
-                  <span className="w-1.5 h-1.5 rounded-full" style={{ background: t.color }} />
-                  <span className="text-[11px] uppercase tracking-wider" style={{ color: PALETTE.muted }}>{t.label}</span>
-                  {testamentReadCounts[t.key] > testamentChapterCounts[t.key] && (
+                  <span className="w-1.5 h-1.5 rounded-full" style={{ background: tst.color }} />
+                  <span className="text-[11px] uppercase tracking-wider" style={{ color: PALETTE.muted }}>{testamentLabel(tst.key)}</span>
+                  {testamentReadCounts[tst.key] > testamentChapterCounts[tst.key] && (
                     <span className="text-[10px]" style={{ color: PALETTE.amber }}>
-                      · {testamentReadCounts[t.key] - testamentChapterCounts[t.key]} book{testamentReadCounts[t.key] - testamentChapterCounts[t.key] === 1 ? "" : "s"} re-read
+                      · {t(
+                        `${testamentReadCounts[tst.key] - testamentChapterCounts[tst.key]} book${testamentReadCounts[tst.key] - testamentChapterCounts[tst.key] === 1 ? "" : "s"} re-read`,
+                        `أُعيدت قراءة ${testamentReadCounts[tst.key] - testamentChapterCounts[tst.key]} سفرًا`
+                      )}
                     </span>
                   )}
                 </div>
@@ -802,7 +905,10 @@ export default function LectioTracker() {
                     return (
                       <div
                         key={b.name}
-                        title={`${b.name} — ${read}/${b.chapters} chapters (${Math.round(pct * 100)}%)${hasReread ? ` · book completed ${completions}×` : ""}`}
+                        title={t(
+                          `${b.name} — ${read}/${b.chapters} chapters (${Math.round(pct * 100)}%)${hasReread ? ` · book completed ${completions}×` : ""}`,
+                          `${bookLabel(b.name)} — ${read}/${b.chapters} إصحاحًا (${Math.round(pct * 100)}٪)${hasReread ? ` · اكتمل السفر ${completions} مرات` : ""}`
+                        )}
                         onClick={() => { setActiveTab("books"); openBook(b); }}
                         className="lectio-tile cursor-pointer flex-shrink-0 rounded-t-md overflow-visible relative"
                         style={{ width, border: `1px solid ${hasReread ? PALETTE.amber : PALETTE.wood}`, boxShadow: hasReread ? "0 3px 8px rgba(217,130,43,0.35)" : "0 3px 8px rgba(0,0,0,0.3)" }}
@@ -819,7 +925,7 @@ export default function LectioTracker() {
                           <span className="text-[9px] font-semibold" style={{ color: PALETTE.ink }}>{b.abbr}</span>
                         </div>
                         <div className="relative" style={{ height: fillZoneH, background: "rgba(255,255,255,0.03)", overflow: "hidden" }}>
-                          <div style={{ position: "absolute", bottom: 0, left: 0, right: 0, height: `${pct * 100}%`, background: `linear-gradient(180deg, ${t.color}, ${t.colorDeep})`, transition: "height .5s ease" }} />
+                          <div style={{ position: "absolute", bottom: 0, left: 0, right: 0, height: `${pct * 100}%`, background: `linear-gradient(180deg, ${tst.color}, ${tst.colorDeep})`, transition: "height .5s ease" }} />
                         </div>
                       </div>
                     );
@@ -837,18 +943,18 @@ export default function LectioTracker() {
     <Card>
       <div className="flex items-center gap-2 mb-1">
         <Award size={16} color={PALETTE.gold} />
-        <h3 className="lectio-display text-lg" style={{ color: PALETTE.parchment }}>Milestones</h3>
+        <h3 className="lectio-display text-lg" style={{ color: PALETTE.parchment }}>{t("Milestones", "الإنجازات")}</h3>
       </div>
       {nextMilestone && (
         <p className="text-[11px] mb-3" style={{ color: PALETTE.muted }}>
-          Next up: <span style={{ color: PALETTE.gold }}>{nextMilestone.label}</span>
+          {t("Next up:", "التالي:")} <span style={{ color: PALETTE.gold }}>{nextMilestone.label}</span>
         </p>
       )}
       <div className="flex gap-3 overflow-x-auto lectio-scroll pb-1">
         {milestones.map((m) => {
           const Icon = m.icon;
           return (
-            <div key={m.id} title={m.date ? `Reached ${fmtDate(m.date)}` : undefined} className="flex flex-col items-center flex-shrink-0" style={{ width: 76 }}>
+            <div key={m.id} title={m.date ? t(`Reached ${fmtDate(m.date)}`, `تحقق في ${fmtDate(m.date)}`) : undefined} className="flex flex-col items-center flex-shrink-0" style={{ width: 76 }}>
               <div
                 className="rounded-full flex items-center justify-center mb-1.5"
                 style={{
@@ -872,28 +978,28 @@ export default function LectioTracker() {
     <Card>
       <div className="flex items-center gap-2 mb-3">
         <TrendingUp size={16} color={PALETTE.gold} />
-        <h3 className="lectio-display text-lg" style={{ color: PALETTE.parchment }}>Pace &amp; estimate</h3>
+        <h3 className="lectio-display text-lg" style={{ color: PALETTE.parchment }}>{t("Pace & estimate", "الوتيرة والتقدير")}</h3>
       </div>
-      {paceInfo.status === "none" && <p className="text-sm" style={{ color: PALETTE.muted }}>Read a chapter or two to get a pace estimate.</p>}
-      {paceInfo.status === "stalled" && <p className="text-sm" style={{ color: PALETTE.muted }}>Not enough recent activity yet to project a completion date.</p>}
+      {paceInfo.status === "none" && <p className="text-sm" style={{ color: PALETTE.muted }}>{t("Read a chapter or two to get a pace estimate.", "اقرأ إصحاحًا أو اثنين للحصول على تقدير للوتيرة.")}</p>}
+      {paceInfo.status === "stalled" && <p className="text-sm" style={{ color: PALETTE.muted }}>{t("Not enough recent activity yet to project a completion date.", "لا يوجد نشاط كافٍ مؤخرًا لتوقع تاريخ الإكمال.")}</p>}
       {paceInfo.status === "done" && (
         <p className="text-sm lectio-display text-lg" style={{ color: PALETTE.gold }}>
-          {filterTestament === "all" ? "The entire canon" : testamentOf(filterTestament).label} — complete. 🎉
+          {filterTestament === "all" ? t("The entire canon", "الكتاب المقدس بأكمله") : testamentLabel(filterTestament)} — {t("complete. 🎉", "اكتمل. 🎉")}
         </p>
       )}
       {paceInfo.status === "ok" && (
         <div className="flex flex-wrap gap-6">
           <div>
             <div className="text-2xl lectio-display" style={{ color: PALETTE.parchment }}>{fmtDate(paceInfo.completionDate)}</div>
-            <div className="text-xs mt-1" style={{ color: PALETTE.muted }}>estimated completion date</div>
+            <div className="text-xs mt-1" style={{ color: PALETTE.muted }}>{t("estimated completion date", "تاريخ الإكمال المتوقع")}</div>
           </div>
           <div>
             <div className="text-2xl lectio-display" style={{ color: PALETTE.parchment }}>{paceInfo.paceWeekly}</div>
-            <div className="text-xs mt-1" style={{ color: PALETTE.muted }}>chapters / week (current pace)</div>
+            <div className="text-xs mt-1" style={{ color: PALETTE.muted }}>{t("chapters / week (current pace)", "إصحاحًا / أسبوع (الوتيرة الحالية)")}</div>
           </div>
           <div>
             <div className="text-2xl lectio-display" style={{ color: PALETTE.parchment }}>{paceInfo.remaining}</div>
-            <div className="text-xs mt-1" style={{ color: PALETTE.muted }}>chapters remaining</div>
+            <div className="text-xs mt-1" style={{ color: PALETTE.muted }}>{t("chapters remaining", "إصحاحًا متبقيًا")}</div>
           </div>
         </div>
       )}
@@ -906,13 +1012,13 @@ export default function LectioTracker() {
       <Card>
         <div className="flex items-center gap-2 mb-3">
           <Sparkles size={16} color={PALETTE.amber} />
-          <h3 className="lectio-display text-lg" style={{ color: PALETTE.parchment }}>Most re-read books</h3>
+          <h3 className="lectio-display text-lg" style={{ color: PALETTE.parchment }}>{t("Most re-read books", "الأسفار الأكثر إعادة قراءة")}</h3>
         </div>
-        <p className="text-[11px] mb-3" style={{ color: PALETTE.muted }}>Counted only once a book has been read cover to cover more than once.</p>
+        <p className="text-[11px] mb-3" style={{ color: PALETTE.muted }}>{t("Counted only once a book has been read cover to cover more than once.", "تُحتسب فقط بعد قراءة السفر كاملاً أكثر من مرة.")}</p>
         <div className="space-y-1.5">
           {topRereadBooks.map((b) => (
             <button key={b.name} onClick={() => { setActiveTab("books"); openBook(BOOK_BY_NAME[b.name]); }} className="w-full flex items-center justify-between px-3 py-1.5 rounded-lg text-sm" style={{ background: PALETTE.wood, color: PALETTE.parchment }}>
-              <span>{b.name}</span>
+              <span>{bookLabel(b.name)}</span>
               <RereadChip count={b.completions} />
             </button>
           ))}
@@ -927,13 +1033,13 @@ export default function LectioTracker() {
     let title = "", body = null;
 
     if (expandedStat === "chapters") {
-      title = "Chapters read";
+      title = t("Chapters read", "الإصحاحات المقروءة");
       body = chaptersReadDetail.length ? (
         <div className="space-y-3">
           {chaptersReadDetail.map(({ book, chapters }) => (
             <div key={book}>
               <p className="text-xs font-semibold mb-1" style={{ color: PALETTE.parchment }}>
-                {book} <span style={{ color: PALETTE.muted, fontWeight: 400 }}>({chapters.length})</span>
+                {bookLabel(book)} <span style={{ color: PALETTE.muted, fontWeight: 400 }}>({chapters.length})</span>
               </p>
               <div className="flex flex-wrap gap-1">
                 {chapters.map((c) => (
@@ -945,32 +1051,32 @@ export default function LectioTracker() {
             </div>
           ))}
         </div>
-      ) : <p className="text-sm" style={{ color: PALETTE.muted }}>No chapters read yet in this scope.</p>;
+      ) : <p className="text-sm" style={{ color: PALETTE.muted }}>{t("No chapters read yet in this scope.", "لم تُقرأ أي إصحاحات بعد ضمن هذا النطاق.")}</p>;
     }
 
     if (expandedStat === "books") {
-      title = "Books completed";
+      title = t("Books completed", "الأسفار المكتملة");
       body = (
         <div className="space-y-4">
           <div>
-            <p className="text-[11px] uppercase tracking-wider mb-2" style={{ color: PALETTE.muted }}>Completed</p>
+            <p className="text-[11px] uppercase tracking-wider mb-2" style={{ color: PALETTE.muted }}>{t("Completed", "مكتملة")}</p>
             {booksCompletedDetail.length ? (
               <div className="flex flex-wrap gap-1.5">
                 {booksCompletedDetail.map((b) => (
                   <button key={b.name} onClick={() => { setActiveTab("books"); openBook(b); }} className="text-xs rounded-full px-3 py-1 flex items-center gap-1" style={{ background: PALETTE.gold, color: PALETTE.ink }}>
-                    <CheckCircle2 size={11} /> {b.name}
+                    <CheckCircle2 size={11} /> {bookLabel(b.name)}
                   </button>
                 ))}
               </div>
-            ) : <p className="text-sm" style={{ color: PALETTE.muted }}>None finished yet.</p>}
+            ) : <p className="text-sm" style={{ color: PALETTE.muted }}>{t("None finished yet.", "لم يكتمل أي سفر بعد.")}</p>}
           </div>
           {booksInProgressDetail.length > 0 && (
             <div>
-              <p className="text-[11px] uppercase tracking-wider mb-2" style={{ color: PALETTE.muted }}>Closest to finishing</p>
+              <p className="text-[11px] uppercase tracking-wider mb-2" style={{ color: PALETTE.muted }}>{t("Closest to finishing", "الأقرب إلى الاكتمال")}</p>
               <div className="space-y-1.5">
                 {booksInProgressDetail.map((b) => (
                   <button key={b.name} onClick={() => { setActiveTab("books"); openBook(BOOK_BY_NAME[b.name]); }} className="w-full flex items-center justify-between px-3 py-1.5 rounded-lg text-sm" style={{ background: PALETTE.bgSoft2, color: PALETTE.parchment }}>
-                    <span>{b.name}</span>
+                    <span>{bookLabel(b.name)}</span>
                     <span style={{ color: PALETTE.gold }}>{b.read}/{b.total}</span>
                   </button>
                 ))}
@@ -982,29 +1088,29 @@ export default function LectioTracker() {
     }
 
     if (expandedStat === "verses") {
-      title = "Verses read (est.) by book";
+      title = t("Verses read (est.) by book", "الآيات المقروءة (تقريبًا) حسب السفر");
       body = versesDetail.length ? (
         <div className="space-y-1.5 max-h-72 overflow-y-auto lectio-scroll pr-1">
           {versesDetail.map((v) => (
             <button key={v.name} onClick={() => { setActiveTab("books"); openBook(BOOK_BY_NAME[v.name]); }} className="w-full flex items-center justify-between px-3 py-1.5 rounded-lg text-sm" style={{ background: PALETTE.bgSoft2, color: PALETTE.parchment }}>
-              <span>{v.name}</span>
+              <span>{bookLabel(v.name)}</span>
               <span style={{ color: PALETTE.gold }}>~{v.est.toLocaleString()} <span style={{ color: PALETTE.muted }}>/ {v.total.toLocaleString()}</span></span>
             </button>
           ))}
         </div>
-      ) : <p className="text-sm" style={{ color: PALETTE.muted }}>No verses read yet in this scope.</p>;
+      ) : <p className="text-sm" style={{ color: PALETTE.muted }}>{t("No verses read yet in this scope.", "لم تُقرأ أي آيات بعد ضمن هذا النطاق.")}</p>;
     }
 
     if (expandedStat === "rereads") {
-      title = "Re-reads";
-      const achievements = TESTAMENTS.filter((t) => testamentFullyReread[t.key]);
+      title = t("Re-reads", "إعادة القراءة");
+      const achievements = TESTAMENTS.filter((tst) => testamentFullyReread[tst.key]);
       body = (
         <div className="space-y-3">
           {achievements.length > 0 && (
             <div className="flex flex-wrap gap-2">
-              {achievements.map((t) => (
-                <span key={t.key} className="flex items-center gap-1.5 text-xs font-semibold rounded-full px-3 py-1.5" style={{ background: `linear-gradient(135deg, ${PALETTE.gold}, #B98A22)`, color: PALETTE.ink }}>
-                  <Award size={13} /> {t.label} fully re-read
+              {achievements.map((tst) => (
+                <span key={tst.key} className="flex items-center gap-1.5 text-xs font-semibold rounded-full px-3 py-1.5" style={{ background: `linear-gradient(135deg, ${PALETTE.gold}, #B98A22)`, color: PALETTE.ink }}>
+                  <Award size={13} /> {t(`${tst.label} fully re-read`, `${testamentLabel(tst.key)} — أُعيدت قراءته بالكامل`)}
                 </span>
               ))}
             </div>
@@ -1013,36 +1119,44 @@ export default function LectioTracker() {
             <div className="space-y-1.5">
               {rereadBooksDetail.map((b) => (
                 <button key={b.name} onClick={() => { setActiveTab("books"); openBook(BOOK_BY_NAME[b.name]); }} className="w-full flex items-center justify-between px-3 py-1.5 rounded-lg text-sm" style={{ background: PALETTE.bgSoft2, color: PALETTE.parchment }}>
-                  <span>{b.name}</span>
+                  <span>{bookLabel(b.name)}</span>
                   <RereadChip count={b.completions} />
                 </button>
               ))}
             </div>
           ) : (
-            <p className="text-sm" style={{ color: PALETTE.muted }}>No book has been read more than once yet — finish a book a second time to see it here.</p>
+            <p className="text-sm" style={{ color: PALETTE.muted }}>{t("No book has been read more than once yet — finish a book a second time to see it here.", "لم يُقرأ أي سفر أكثر من مرة بعد — أنهِ سفرًا للمرة الثانية ليظهر هنا.")}</p>
           )}
         </div>
       );
     }
 
     if (expandedStat === "current-streak") {
-      title = "Current streak";
+      title = t("Current streak", "السلسلة الحالية");
       body = currentStreakRange ? (
         <p className="text-sm" style={{ color: PALETTE.parchment }}>
-          Reading every day from <span style={{ color: PALETTE.gold }}>{fmtDate(currentStreakRange.start)}</span> through{" "}
-          <span style={{ color: PALETTE.gold }}>{fmtDate(currentStreakRange.end)}</span> — {currentStreak} day{currentStreak === 1 ? "" : "s"} and counting.
+          {t(
+            <>Reading every day from <span style={{ color: PALETTE.gold }}>{fmtDate(currentStreakRange.start)}</span> through{" "}
+              <span style={{ color: PALETTE.gold }}>{fmtDate(currentStreakRange.end)}</span> — {currentStreak} day{currentStreak === 1 ? "" : "s"} and counting.</>,
+            <>قراءة يومية من <span style={{ color: PALETTE.gold }}>{fmtDate(currentStreakRange.start)}</span> حتى{" "}
+              <span style={{ color: PALETTE.gold }}>{fmtDate(currentStreakRange.end)}</span> — {currentStreak} يومًا ومستمر.</>
+          )}
         </p>
-      ) : <p className="text-sm" style={{ color: PALETTE.muted }}>No active streak — read today to start one.</p>;
+      ) : <p className="text-sm" style={{ color: PALETTE.muted }}>{t("No active streak — read today to start one.", "لا توجد سلسلة نشطة — اقرأ اليوم لتبدأ واحدة.")}</p>;
     }
 
     if (expandedStat === "longest-streak") {
-      title = "Longest streak";
+      title = t("Longest streak", "أطول سلسلة");
       body = longestStreakRange ? (
         <p className="text-sm" style={{ color: PALETTE.parchment }}>
-          Your best run was <span style={{ color: PALETTE.gold }}>{longestStreak} day{longestStreak === 1 ? "" : "s"}</span>, from{" "}
-          <span style={{ color: PALETTE.gold }}>{fmtDate(longestStreakRange.start)}</span> through <span style={{ color: PALETTE.gold }}>{fmtDate(longestStreakRange.end)}</span>.
+          {t(
+            <>Your best run was <span style={{ color: PALETTE.gold }}>{longestStreak} day{longestStreak === 1 ? "" : "s"}</span>, from{" "}
+              <span style={{ color: PALETTE.gold }}>{fmtDate(longestStreakRange.start)}</span> through <span style={{ color: PALETTE.gold }}>{fmtDate(longestStreakRange.end)}</span>.</>,
+            <>أفضل سلسلة لك كانت <span style={{ color: PALETTE.gold }}>{longestStreak} يومًا</span>، من{" "}
+              <span style={{ color: PALETTE.gold }}>{fmtDate(longestStreakRange.start)}</span> حتى <span style={{ color: PALETTE.gold }}>{fmtDate(longestStreakRange.end)}</span>.</>
+          )}
         </p>
-      ) : <p className="text-sm" style={{ color: PALETTE.muted }}>No streak yet.</p>;
+      ) : <p className="text-sm" style={{ color: PALETTE.muted }}>{t("No streak yet.", "لا توجد سلسلة بعد.")}</p>;
     }
 
     return (
@@ -1069,7 +1183,7 @@ export default function LectioTracker() {
       <div className="lectio-fade-in rounded-2xl p-4 mb-4" style={{ background: `linear-gradient(160deg, #F6EBCF, ${PALETTE.parchment})`, border: `1px solid ${PALETTE.goldSoft}`, boxShadow: "0 8px 20px rgba(0,0,0,0.25)" }}>
         <div className="flex items-center justify-between mb-3">
           <div className="flex items-center gap-2">
-            <span className="lectio-display text-lg" style={{ color: PALETTE.ink }}>{book} {chapter}</span>
+            <span className="lectio-display text-lg" style={{ color: PALETTE.ink }}>{bookLabel(book)} {chapter}</span>
             {entries.length > 1 && <RereadChip count={entries.length} size="lg" />}
           </div>
           <button onClick={() => setSelected(null)} className="rounded-md p-1" style={{ color: PALETTE.inkSoft }}>
@@ -1083,7 +1197,7 @@ export default function LectioTracker() {
             className="flex-1 flex items-center justify-center gap-1.5 text-xs py-2"
             style={{ background: entries.length === 0 ? PALETTE.ink : "transparent", color: entries.length === 0 ? PALETTE.parchment : PALETTE.ink }}
           >
-            <XCircle size={13} /> Not Read
+            <XCircle size={13} /> {t("Not Read", "لم يُقرأ")}
           </button>
           <button
             onClick={() => entries.length === 0 && addReading(book, chapter, todayStr())}
@@ -1096,7 +1210,7 @@ export default function LectioTracker() {
               cursor: entries.length > 0 ? "default" : "pointer",
             }}
           >
-            <CheckCircle2 size={13} /> Read
+            <CheckCircle2 size={13} /> {t("Read", "مقروء")}
           </button>
           <button
             onClick={() => entries.length >= 1 && addReading(book, chapter, todayStr())}
@@ -1109,14 +1223,14 @@ export default function LectioTracker() {
               cursor: entries.length === 0 ? "default" : "pointer",
             }}
           >
-            <Repeat size={13} /> Read Again
+            <Repeat size={13} /> {t("Read Again", "إعادة القراءة")}
           </button>
         </div>
 
         {entries.length > 0 && (
           <div>
             <p className="text-[11px] uppercase tracking-wider mb-1.5" style={{ color: PALETTE.inkSoft }}>
-              {entries.length === 1 ? "Read once" : `Read ${entries.length} times`}
+              {entries.length === 1 ? t("Read once", "قُرئ مرة واحدة") : t(`Read ${entries.length} times`, `قُرئ ${entries.length} مرات`)}
             </p>
             <div className="space-y-1.5">
               {ascEntries.map((e, i) => (
@@ -1129,7 +1243,7 @@ export default function LectioTracker() {
                     className="text-sm rounded-md px-2 py-1 outline-none"
                     style={{ background: "#fff", border: `1px solid ${PALETTE.inkSoft}`, color: PALETTE.ink }}
                   />
-                  <button onClick={() => removeEntry(book, chapter, e.id)} title="Delete this reading" className="rounded-md p-1.5" style={{ background: PALETTE.burgundy, color: PALETTE.parchment }}>
+                  <button onClick={() => removeEntry(book, chapter, e.id)} title={t("Delete this reading", "حذف هذه القراءة")} className="rounded-md p-1.5" style={{ background: PALETTE.burgundy, color: PALETTE.parchment }}>
                     <Trash2 size={13} />
                   </button>
                 </div>
@@ -1143,7 +1257,7 @@ export default function LectioTracker() {
 
   const ChapterGrid = ({ book }) => {
     const cells = Array.from({ length: book.chapters }, (_, i) => i + 1);
-    const t = testamentOf(book.testament);
+    const tst = testamentOf(book.testament);
     return (
       <div className="flex flex-wrap gap-2">
         {cells.map((c) => {
@@ -1153,8 +1267,8 @@ export default function LectioTracker() {
           const isSelected = selected && selected.book === book.name && selected.chapter === c;
           const sortedDates = isRead ? entries.slice().sort((a, b) => (a.date < b.date ? 1 : -1)).map((e) => fmtDate(e.date)) : [];
           const tooltip = isRead
-            ? (isReread ? `Read ${entries.length}× — ${sortedDates.join(", ")}` : `Read once — ${sortedDates[0]}`)
-            : "Click to set status";
+            ? (isReread ? t(`Read ${entries.length}× — ${sortedDates.join(", ")}`, `قُرئ ${entries.length} مرات — ${sortedDates.join("، ")}`) : t(`Read once — ${sortedDates[0]}`, `قُرئ مرة واحدة — ${sortedDates[0]}`))
+            : t("Click to set status", "اضغط لتحديد الحالة");
           return (
             <button
               key={c}
@@ -1163,7 +1277,7 @@ export default function LectioTracker() {
               className="lectio-cell relative rounded-xl text-xs font-semibold flex items-center justify-center"
               style={{
                 width: 34, height: 34,
-                background: isRead ? `linear-gradient(150deg, ${t.color}, ${t.colorDeep})` : "rgba(255,255,255,0.02)",
+                background: isRead ? `linear-gradient(150deg, ${tst.color}, ${tst.colorDeep})` : "rgba(255,255,255,0.02)",
                 border: `1.5px solid ${isRead ? (isReread ? PALETTE.amber : t.color) : PALETTE.inkSoft}`,
                 color: PALETTE.parchment,
                 opacity: isRead ? 1 : 0.55,
@@ -1194,11 +1308,11 @@ export default function LectioTracker() {
         <div className="lectio-fade-in">
           {currentlyReadingBooks.length > 0 && (
             <div className="mb-5">
-              <h3 className="lectio-display text-lg mb-3" style={{ color: PALETTE.parchment }}>Current reading</h3>
+              <h3 className="lectio-display text-lg mb-3" style={{ color: PALETTE.parchment }}>{t("Current reading", "القراءة الحالية")}</h3>
               <div className="grid gap-3" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))" }}>
-                {currentlyReadingBooks.map(({ book: b, read }) => {
+                {currentlyReadingBooks.map(({ book: b, read, lastDate }) => {
                   const pct = Math.round((read / b.chapters) * 100);
-                  const t = testamentOf(b.testament);
+                  const tst = testamentOf(b.testament);
                   return (
                     <button
                       key={b.name}
@@ -1210,11 +1324,14 @@ export default function LectioTracker() {
                         <BookMarked size={16} color={PALETTE.amber} />
                       </div>
                       <div className="min-w-0 flex-1">
-                        <div className="lectio-display text-sm truncate" style={{ color: PALETTE.parchment }}>{b.name}</div>
+                        <div className="lectio-display text-sm truncate" style={{ color: PALETTE.parchment }}>{bookLabel(b.name)}</div>
                         <div className="w-full h-1.5 rounded-full overflow-hidden my-1" style={{ background: PALETTE.wood }}>
-                          <div style={{ width: `${pct}%`, height: "100%", background: `linear-gradient(90deg, ${t.colorDeep}, ${t.color})` }} />
+                          <div style={{ width: `${pct}%`, height: "100%", background: `linear-gradient(90deg, ${tst.colorDeep}, ${tst.color})` }} />
                         </div>
-                        <span className="text-[10px]" style={{ color: PALETTE.amber }}>{read}/{b.chapters} chapters</span>
+                        <div className="flex flex-col gap-0.5">
+                          <span className="text-[10px]" style={{ color: PALETTE.amber }}>{read}/{b.chapters} {t("chapters", "إصحاحًا")}</span>
+                          {lastDate && <span className="text-[10px] truncate" style={{ color: PALETTE.muted }}>{t(`Last read ${fmtDate(lastDate)}`, `آخر قراءة ${fmtDate(lastDate)}`)}</span>}
+                        </div>
                       </div>
                     </button>
                   );
@@ -1223,24 +1340,27 @@ export default function LectioTracker() {
             </div>
           )}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            {testamentProgress.map((t) => (
+            {testamentProgress.map((tst) => (
               <button
-                key={t.key}
-                onClick={() => { setBooksTestament(t.key); setBooksView("grid"); }}
+                key={tst.key}
+                onClick={() => { setBooksTestament(tst.key); setBooksView("grid"); }}
                 className="lectio-tile lectio-card rounded-2xl p-6 text-left"
                 style={{ background: `linear-gradient(150deg, ${PALETTE.bgSoft2}, ${PALETTE.bgSoft})`, border: `1px solid ${PALETTE.wood}` }}
               >
                 <div className="flex items-center justify-between mb-1">
-                  <h2 className="lectio-display text-2xl" style={{ color: PALETTE.parchment }}>{t.label}</h2>
-                  {t.bookPasses > t.booksDoneOnce && <RereadChip count={t.bookPasses - t.booksDoneOnce} />}
+                  <h2 className="lectio-display text-2xl" style={{ color: PALETTE.parchment }}>{tst.label}</h2>
+                  {tst.bookPasses > tst.booksDoneOnce && <RereadChip count={tst.bookPasses - tst.booksDoneOnce} />}
                 </div>
                 <p className="text-xs mb-3" style={{ color: PALETTE.muted }}>
-                  {BOOKS.filter((b) => b.testament === t.key).length} books · {t.read}/{t.total} chapters · {t.totalReads} total reading{t.totalReads === 1 ? "" : "s"}
+                  {t(
+                    `${BOOKS.filter((b) => b.testament === tst.key).length} books · ${tst.read}/${tst.total} chapters · ${tst.totalReads} total reading${tst.totalReads === 1 ? "" : "s"}`,
+                    `${BOOKS.filter((b) => b.testament === tst.key).length} سفرًا · ${tst.read}/${tst.total} إصحاحًا · ${tst.totalReads} قراءة إجمالًا`
+                  )}
                 </p>
                 <div className="w-full h-2 rounded-full overflow-hidden" style={{ background: PALETTE.wood }}>
-                  <div style={{ width: `${t.pct}%`, height: "100%", background: `linear-gradient(90deg, ${t.colorDeep}, ${t.color})` }} />
+                  <div style={{ width: `${tst.pct}%`, height: "100%", background: `linear-gradient(90deg, ${tst.colorDeep}, ${tst.color})` }} />
                 </div>
-                <span className="text-xs mt-2 inline-block" style={{ color: t.color }}>{t.pct}% read →</span>
+                <span className="text-xs mt-2 inline-block" style={{ color: tst.color }}>{tst.pct}% {t("read →", "مقروء ←")}</span>
               </button>
             ))}
           </div>
@@ -1249,14 +1369,14 @@ export default function LectioTracker() {
     }
 
     if (booksView === "grid") {
-      const t = testamentOf(booksTestament);
+      const tst = testamentOf(booksTestament);
       const booksIn = BOOKS.filter((b) => b.testament === booksTestament);
       return (
         <div className="lectio-fade-in">
           <button onClick={() => setBooksView("testaments")} className="flex items-center gap-1 text-sm mb-3" style={{ color: PALETTE.gold }}>
-            <ChevronLeft size={15} /> All testaments
+            <ChevronLeft size={15} /> {t("All testaments", "كل العهود")}
           </button>
-          <h2 className="lectio-display text-xl mb-3" style={{ color: PALETTE.parchment }}>{t.label}</h2>
+          <h2 className="lectio-display text-xl mb-3" style={{ color: PALETTE.parchment }}>{testamentLabel(tst.key)}</h2>
           <div className="grid gap-3" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(130px, 1fr))" }}>
             {booksIn.map((b) => {
               const read = bookProgress[b.name] || 0;
@@ -1274,11 +1394,11 @@ export default function LectioTracker() {
                       {inProgress && <BookMarked size={14} color={PALETTE.amber} />}
                     </div>
                   </div>
-                  <div className="lectio-display text-sm mb-2" style={{ color: PALETTE.parchment, lineHeight: 1.15 }}>{b.name}</div>
+                  <div className="lectio-display text-sm mb-2" style={{ color: PALETTE.parchment, lineHeight: 1.15 }}>{bookLabel(b.name)}</div>
                   <div className="w-full h-1.5 rounded-full overflow-hidden mb-1" style={{ background: PALETTE.wood }}>
-                    <div style={{ width: `${pct}%`, height: "100%", background: `linear-gradient(90deg, ${t.colorDeep}, ${t.color})` }} />
+                    <div style={{ width: `${pct}%`, height: "100%", background: `linear-gradient(90deg, ${tst.colorDeep}, ${tst.color})` }} />
                   </div>
-                  <span className="text-[10px]" style={{ color: inProgress ? PALETTE.amber : PALETTE.muted }}>{read}/{b.chapters} chapters</span>
+                  <span className="text-[10px]" style={{ color: inProgress ? PALETTE.amber : PALETTE.muted }}>{read}/{b.chapters} {t("chapters", "إصحاحًا")}</span>
                 </button>
               );
             })}
@@ -1294,14 +1414,14 @@ export default function LectioTracker() {
     return (
       <div className="lectio-fade-in">
         <div className="flex items-center gap-1 text-sm mb-3" style={{ color: PALETTE.gold }}>
-          <button onClick={() => { setBooksView("testaments"); setSelected(null); }} className="flex items-center gap-1">{testamentOf(book.testament).label}</button>
+          <button onClick={() => { setBooksView("testaments"); setSelected(null); }} className="flex items-center gap-1">{testamentLabel(book.testament)}</button>
           <ChevronRight size={13} color={PALETTE.muted} />
-          <button onClick={() => { setBooksView("grid"); setSelected(null); }}>All books</button>
+          <button onClick={() => { setBooksView("grid"); setSelected(null); }}>{t("All books", "كل الأسفار")}</button>
         </div>
         <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
-          <h2 className="lectio-display text-2xl" style={{ color: PALETTE.parchment }}>{book.name}</h2>
+          <h2 className="lectio-display text-2xl" style={{ color: PALETTE.parchment }}>{bookLabel(book.name)}</h2>
           <span className="text-sm flex items-center gap-2" style={{ color: PALETTE.muted }}>
-            {read}/{book.chapters} chapters read
+            {read}/{book.chapters} {t("chapters read", "إصحاحًا مقروءًا")}
             {completions >= 2 && <RereadChip count={completions} />}
           </span>
         </div>
@@ -1313,38 +1433,164 @@ export default function LectioTracker() {
     );
   };
 
+  const ProfilePicker = () => {
+    const [managing, setManaging] = useState(false);
+    const [addingName, setAddingName] = useState(null); // string while the "new profile" input is open
+
+    const submitNewProfile = () => {
+      const name = (addingName || "").trim();
+      if (!name) { setAddingName(null); return; }
+      addProfile(name);
+      setAddingName(null);
+    };
+
+    return (
+      <div className="lectio-root flex items-center justify-center" style={{ background: PALETTE.bg, minHeight: "100vh", padding: 20 }}>
+        {fontImport}
+        <div style={{ maxWidth: 760, width: "100%" }}>
+          <div className="flex items-center justify-center gap-3 mb-2">
+            <BookMarked size={30} color={PALETTE.gold} />
+            <h1 className="lectio-display text-4xl" style={{ color: PALETTE.parchment }}>Lectio</h1>
+          </div>
+          <p className="text-center text-lg mb-10" style={{ color: PALETTE.muted }}>{t("Who's reading?", "من الذي يقرأ؟")}</p>
+          <div className="flex flex-wrap items-start justify-center gap-6">
+            {profiles.map((p) => (
+              <div key={p.id} className="flex flex-col items-center gap-2" style={{ width: 110 }}>
+                <button
+                  onClick={() => (managing ? null : selectProfile(p.id))}
+                  className="lectio-tile rounded-2xl flex items-center justify-center relative"
+                  style={{ width: 96, height: 96, background: `linear-gradient(150deg, ${p.color}, ${PALETTE.bgSoft2})`, border: `2px solid ${PALETTE.wood}` }}
+                >
+                  <span className="lectio-display text-3xl" style={{ color: PALETTE.parchment }}>{p.name.trim().charAt(0).toUpperCase()}</span>
+                  {managing && (
+                    <span
+                      role="button"
+                      onClick={(e) => { e.stopPropagation(); if (window.confirm(t(`Delete "${p.name}"? This removes all of their tracked reading.`, `حذف "${p.name}"؟ سيؤدي هذا لحذف كل قراءاته المسجّلة.`))) deleteProfile(p.id); }}
+                      className="absolute rounded-full flex items-center justify-center"
+                      style={{ top: -8, right: -8, width: 26, height: 26, background: PALETTE.burgundy, color: PALETTE.parchment, border: `1.5px solid ${PALETTE.bg}` }}
+                    >
+                      <Trash2 size={13} />
+                    </span>
+                  )}
+                </button>
+                {managing ? (
+                  <input
+                    defaultValue={p.name}
+                    onBlur={(e) => { const v = e.target.value.trim(); if (v && v !== p.name) renameProfile(p.id, v); }}
+                    className="text-sm text-center rounded-md px-2 py-1 outline-none w-full"
+                    style={{ background: PALETTE.bgSoft2, border: `1px solid ${PALETTE.goldSoft}`, color: PALETTE.parchment }}
+                  />
+                ) : (
+                  <span className="text-sm truncate w-full text-center" style={{ color: PALETTE.parchment }}>{p.name}</span>
+                )}
+              </div>
+            ))}
+
+            <div className="flex flex-col items-center gap-2" style={{ width: 110 }}>
+              {addingName !== null ? (
+                <div className="flex flex-col items-center gap-2 w-full">
+                  <div className="rounded-2xl flex items-center justify-center" style={{ width: 96, height: 96, border: `2px dashed ${PALETTE.goldSoft}` }}>
+                    <BookMarked size={28} color={PALETTE.goldSoft} />
+                  </div>
+                  <input
+                    autoFocus
+                    value={addingName}
+                    onChange={(e) => setAddingName(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === "Enter") submitNewProfile(); if (e.key === "Escape") setAddingName(null); }}
+                    onBlur={submitNewProfile}
+                    placeholder={t("Name", "الاسم")}
+                    className="text-sm text-center rounded-md px-2 py-1 outline-none w-full"
+                    style={{ background: PALETTE.bgSoft2, border: `1px solid ${PALETTE.goldSoft}`, color: PALETTE.parchment }}
+                  />
+                </div>
+              ) : (
+                <button onClick={() => setAddingName("")} className="lectio-tile rounded-2xl flex items-center justify-center" style={{ width: 96, height: 96, border: `2px dashed ${PALETTE.wood}` }}>
+                  <span className="text-4xl" style={{ color: PALETTE.muted, lineHeight: 1 }}>+</span>
+                </button>
+              )}
+              <span className="text-sm" style={{ color: PALETTE.muted }}>{addingName !== null ? "" : t("Add Profile", "إضافة ملف")}</span>
+            </div>
+          </div>
+
+          {profiles.length > 0 && (
+            <div className="flex justify-center mt-10">
+              <button
+                onClick={() => setManaging((m) => !m)}
+                className="text-xs rounded-md px-4 py-2 uppercase tracking-wider"
+                style={{ background: "transparent", border: `1px solid ${PALETTE.wood}`, color: PALETTE.muted }}
+              >
+                {managing ? t("Done", "تم") : t("Manage Profiles", "إدارة الملفات")}
+              </button>
+            </div>
+          )}
+          <p className="text-center text-[11px] mt-6" style={{ color: PALETTE.wood }}>
+            {t("No passwords — anyone here can view or edit any profile's progress.", "لا كلمات مرور — يمكن لأي شخص هنا عرض أو تعديل تقدم أي ملف.")}
+          </p>
+        </div>
+      </div>
+    );
+  };
+
   if (!loaded) {
     return (
       <div className="lectio-root flex items-center justify-center p-10" style={{ background: PALETTE.bg, minHeight: 300 }}>
         {fontImport}
-        <span className="lectio-display text-lg" style={{ color: PALETTE.parchment }}>Opening the shelf…</span>
+        <span className="lectio-display text-lg" style={{ color: PALETTE.parchment }}>{t("Opening the shelf…", "جارٍ فتح الرف…")}</span>
       </div>
     );
   }
+
+  if (!activeProfileId) {
+    return <ProfilePicker />;
+  }
+  const activeProfile = profiles.find((p) => p.id === activeProfileId) || { name: "?", color: PALETTE.gold };
 
   return (
     <div className="lectio-root" style={{ background: `radial-gradient(circle at 20% 0%, ${PALETTE.bgSoft2}, ${PALETTE.bg} 60%)`, minHeight: "100%", padding: 20 }}>
       {fontImport}
       <div style={{ maxWidth: 920, margin: "0 auto" }}>
         <div className="flex items-center justify-between mb-6 flex-wrap gap-3">
-          <div className="flex items-center gap-2">
-            <BookMarked size={22} color={PALETTE.gold} />
-            <h1 className="lectio-display text-3xl" style={{ color: PALETTE.parchment }}>Lectio</h1>
-          </div>
-          <div className="flex rounded-full overflow-hidden" style={{ border: `1px solid ${PALETTE.wood}` }}>
-            {["dashboard", "books"].map((tb) => (
-              <button key={tb} onClick={() => setActiveTab(tb)} className="lectio-pill px-4 py-1.5 text-sm capitalize" style={{ background: activeTab === tb ? PALETTE.gold : "transparent", color: activeTab === tb ? PALETTE.ink : PALETTE.muted, fontWeight: activeTab === tb ? 600 : 400 }}>
-                {tb}
-              </button>
-            ))}
+          <button
+            onClick={() => { setActiveTab("books"); setBooksView("testaments"); setSelected(null); setExpandedStat(null); }}
+            className="flex items-center gap-3 text-left"
+            title={t("Go to Books", "الذهاب إلى الأسفار")}
+          >
+            <BookMarked size={26} color={PALETTE.gold} />
+            <div>
+              <h1 className="lectio-display text-3xl leading-none" style={{ color: PALETTE.parchment }}>{t("Lectio", "لِكتيو")}</h1>
+              <p className="text-[11px] italic mt-1" style={{ color: PALETTE.goldSoft }}>Ἰησοῦς Χριστός, Υἱὸς Θεοῦ, Σωτήρ</p>
+            </div>
+          </button>
+          <div className="flex items-center gap-3 flex-wrap">
+            <div className="flex rounded-full overflow-hidden" style={{ border: `1px solid ${PALETTE.wood}` }}>
+              {[{ v: "dashboard", l: t("Dashboard", "لوحة التحكم") }, { v: "books", l: t("Books", "الأسفار") }].map((tb) => (
+                <button key={tb.v} onClick={() => setActiveTab(tb.v)} className="lectio-pill px-4 py-1.5 text-sm" style={{ background: activeTab === tb.v ? PALETTE.gold : "transparent", color: activeTab === tb.v ? PALETTE.ink : PALETTE.muted, fontWeight: activeTab === tb.v ? 600 : 400 }}>
+                  {tb.l}
+                </button>
+              ))}
+            </div>
+            <button
+              onClick={switchProfile}
+              title={t("Switch profile", "تبديل الملف")}
+              className="flex items-center gap-2 rounded-full pl-1 pr-3 py-1"
+              style={{ border: `1px solid ${PALETTE.wood}` }}
+            >
+              <span
+                className="rounded-full flex items-center justify-center lectio-display"
+                style={{ width: 26, height: 26, background: `linear-gradient(150deg, ${activeProfile.color}, ${PALETTE.bgSoft2})`, color: PALETTE.parchment, fontSize: 13 }}
+              >
+                {activeProfile.name.trim().charAt(0).toUpperCase()}
+              </span>
+              <span className="text-xs" style={{ color: PALETTE.muted }}>{activeProfile.name}</span>
+            </button>
           </div>
         </div>
 
         {activeTab === "dashboard" && (
           <div className="space-y-5 lectio-fade-in">
             <div className="flex flex-wrap items-center gap-3 rounded-xl p-3" style={{ background: PALETTE.bgSoft, border: `1px solid ${PALETTE.wood}` }}>
-              <span className="text-[11px] uppercase tracking-wider" style={{ color: PALETTE.muted }}>Testament</span>
-              <PillGroup value={filterTestament} onChange={setFilterTestament} options={[{ value: "all", label: "All" }, { value: "ot", label: "Old" }, { value: "nt", label: "New" }]} />
+              <span className="text-[11px] uppercase tracking-wider" style={{ color: PALETTE.muted }}>{t("Testament", "العهد")}</span>
+              <PillGroup value={filterTestament} onChange={setFilterTestament} options={[{ value: "all", label: t("All", "الكل") }, { value: "ot", label: t("Old", "قديم") }, { value: "nt", label: t("New", "جديد") }]} />
             </div>
 
             <Card className="flex flex-wrap items-center gap-6">
@@ -1356,12 +1602,12 @@ export default function LectioTracker() {
                 </div>
               </div>
               <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 flex-1 min-w-[280px]">
-                <StatCard icon={<CheckCircle2 size={16} color={PALETTE.gold} />} label="Chapters read" value={`${scopeRead} / ${scopeTotal}`} active={expandedStat === "chapters"} onClick={() => setExpandedStat((s) => (s === "chapters" ? null : "chapters"))} />
-                <StatCard icon={<Library size={16} color={PALETTE.gold} />} label="Books completed" value={`${scopeBooksCompleted} / ${scopeBooks.length}`} active={expandedStat === "books"} onClick={() => setExpandedStat((s) => (s === "books" ? null : "books"))} />
-                <StatCard icon={<ListChecks size={16} color={PALETTE.gold} />} label="Verses read (est.)" value={scopeVerses.toLocaleString()} sub={`of ~${scopeVersesTotal.toLocaleString()}`} active={expandedStat === "verses"} onClick={() => setExpandedStat((s) => (s === "verses" ? null : "verses"))} />
-                <StatCard icon={<Repeat size={16} color={PALETTE.amber} />} label="Re-reads" value={rereadBooksDetail.length} sub={scopedRereadAchievements.length ? `🏆 ${scopedRereadAchievements.map((t) => t.label).join(" & ")} fully re-read` : undefined} active={expandedStat === "rereads"} onClick={() => setExpandedStat((s) => (s === "rereads" ? null : "rereads"))} />
-                <StatCard icon={<Flame size={16} color={PALETTE.gold} />} label="Current streak" value={`${currentStreak}d`} active={expandedStat === "current-streak"} onClick={() => setExpandedStat((s) => (s === "current-streak" ? null : "current-streak"))} />
-                <StatCard icon={<Flame size={16} color={PALETTE.goldSoft} />} label="Longest streak" value={`${longestStreak}d`} active={expandedStat === "longest-streak"} onClick={() => setExpandedStat((s) => (s === "longest-streak" ? null : "longest-streak"))} />
+                <StatCard icon={<CheckCircle2 size={16} color={PALETTE.gold} />} label={t("Chapters read", "الإصحاحات المقروءة")} value={`${scopeRead} / ${scopeTotal}`} active={expandedStat === "chapters"} onClick={() => setExpandedStat((s) => (s === "chapters" ? null : "chapters"))} />
+                <StatCard icon={<Library size={16} color={PALETTE.gold} />} label={t("Books completed", "الأسفار المكتملة")} value={`${scopeBooksCompleted} / ${scopeBooks.length}`} active={expandedStat === "books"} onClick={() => setExpandedStat((s) => (s === "books" ? null : "books"))} />
+                <StatCard icon={<ListChecks size={16} color={PALETTE.gold} />} label={t("Verses read (est.)", "الآيات المقروءة (تقريبًا)")} value={scopeVerses.toLocaleString()} sub={t(`of ~${scopeVersesTotal.toLocaleString()}`, `من أصل ~${scopeVersesTotal.toLocaleString()}`)} active={expandedStat === "verses"} onClick={() => setExpandedStat((s) => (s === "verses" ? null : "verses"))} />
+                <StatCard icon={<Repeat size={16} color={PALETTE.amber} />} label={t("Re-reads", "إعادة القراءة")} value={rereadBooksDetail.length} sub={scopedRereadAchievements.length ? t(`🏆 ${scopedRereadAchievements.map((tst) => tst.label).join(" & ")} fully re-read`, `🏆 أُعيد قراءة ${scopedRereadAchievements.map((tst) => testamentLabel(tst.key)).join(" و")} بالكامل`) : undefined} active={expandedStat === "rereads"} onClick={() => setExpandedStat((s) => (s === "rereads" ? null : "rereads"))} />
+                <StatCard icon={<Flame size={16} color={PALETTE.gold} />} label={t("Current streak", "السلسلة الحالية")} value={t(`${currentStreak}d`, `${currentStreak} يومًا`)} active={expandedStat === "current-streak"} onClick={() => setExpandedStat((s) => (s === "current-streak" ? null : "current-streak"))} />
+                <StatCard icon={<Flame size={16} color={PALETTE.goldSoft} />} label={t("Longest streak", "أطول سلسلة")} value={t(`${longestStreak}d`, `${longestStreak} يومًا`)} active={expandedStat === "longest-streak"} onClick={() => setExpandedStat((s) => (s === "longest-streak" ? null : "longest-streak"))} />
               </div>
               <StatDetailPanel />
             </Card>
@@ -1372,10 +1618,10 @@ export default function LectioTracker() {
 
             <Card>
               <div className="flex items-center justify-between flex-wrap gap-3 mb-3">
-                <h3 className="lectio-display text-lg" style={{ color: PALETTE.parchment }}>Reading history</h3>
+                <h3 className="lectio-display text-lg" style={{ color: PALETTE.parchment }}>{t("Reading history", "سجل القراءة")}</h3>
                 <div className="flex items-center gap-2 flex-wrap">
-                  <PillGroup value={historyMetric} onChange={setHistoryMetric} options={[{ value: "books", label: "Books" }, { value: "chapters", label: "Chapters" }]} />
-                  <PillGroup value={historyGranularity} onChange={setHistoryGranularity} options={[{ value: "year", label: "Year" }, { value: "month", label: "Month" }]} />
+                  <PillGroup value={historyMetric} onChange={setHistoryMetric} options={[{ value: "books", label: t("Books", "الأسفار") }, { value: "chapters", label: t("Chapters", "الإصحاحات") }]} />
+                  <PillGroup value={historyGranularity} onChange={setHistoryGranularity} options={[{ value: "year", label: t("Year", "سنة") }, { value: "month", label: t("Month", "شهر") }]} />
                 </div>
               </div>
               {historyData.length > 0 ? (
@@ -1399,33 +1645,33 @@ export default function LectioTracker() {
                 </>
               ) : (
                 <div className="text-sm py-8 text-center" style={{ color: PALETTE.muted }}>
-                  {historyMetric === "books" ? "Finish a book to see it show up here." : "Mark a few chapters read to see your history take shape."}
+                  {historyMetric === "books" ? t("Finish a book to see it show up here.", "أنهِ سفرًا ليظهر هنا.") : t("Mark a few chapters read to see your history take shape.", "علّم بعض الإصحاحات كمقروءة ليتشكل سجلك.")}
                 </div>
               )}
               <p className="text-[11px] mt-2" style={{ color: PALETTE.muted }}>
-                {historyMetric === "books" ? "A book is counted the moment its last remaining chapter is first read." : "Counts each chapter once, in the period it was first read — re-reads aren't counted again."}
+                {historyMetric === "books" ? t("A book is counted the moment its last remaining chapter is first read.", "يُحتسب السفر بمجرد قراءة آخر إصحاح متبقٍ منه لأول مرة.") : t("Counts each chapter once, in the period it was first read — re-reads aren't counted again.", "يُحتسب كل إصحاح مرة واحدة، في الفترة التي قُرئ فيها لأول مرة — لا تُحتسب إعادة القراءة مجددًا.")}
               </p>
             </Card>
 
             <Card>
-              <h3 className="lectio-display text-lg mb-3" style={{ color: PALETTE.parchment }}>Progress by testament</h3>
+              <h3 className="lectio-display text-lg mb-3" style={{ color: PALETTE.parchment }}>{t("Progress by testament", "التقدم حسب العهد")}</h3>
               <ResponsiveContainer width="100%" height={140}>
                 <BarChart data={testamentProgress} layout="vertical" margin={{ left: 10, right: 20 }}>
                   <CartesianGrid stroke={PALETTE.wood} horizontal={false} />
                   <XAxis type="number" domain={[0, 100]} tick={{ fill: PALETTE.muted, fontSize: 11 }} axisLine={{ stroke: PALETTE.wood }} tickLine={false} unit="%" />
                   <YAxis type="category" dataKey="label" tick={{ fill: PALETTE.muted, fontSize: 12 }} axisLine={false} tickLine={false} width={110} />
-                  <Tooltip contentStyle={{ background: PALETTE.parchment, border: `1px solid ${PALETTE.goldSoft}`, borderRadius: 8, fontSize: 12 }} labelStyle={{ color: PALETTE.ink, fontWeight: 600 }} formatter={(v, n, p) => [`${p.payload.read}/${p.payload.total} chapters · ${p.payload.totalReads} total readings`, "Read"]} />
+                  <Tooltip contentStyle={{ background: PALETTE.parchment, border: `1px solid ${PALETTE.goldSoft}`, borderRadius: 8, fontSize: 12 }} labelStyle={{ color: PALETTE.ink, fontWeight: 600 }} formatter={(v, n, p) => [t(`${p.payload.read}/${p.payload.total} chapters · ${p.payload.totalReads} total readings`, `${p.payload.read}/${p.payload.total} إصحاحًا · ${p.payload.totalReads} قراءة إجمالًا`), t("Read", "مقروء")]} />
                   <Bar dataKey="pct" radius={[0, 4, 4, 0]} barSize={28}>
-                    {testamentProgress.map((t) => <RCell key={t.key} fill={t.color} opacity={filterTestament === "all" || filterTestament === t.key ? 1 : 0.3} />)}
+                    {testamentProgress.map((tst) => <RCell key={tst.key} fill={tst.color} opacity={filterTestament === "all" || filterTestament === tst.key ? 1 : 0.3} />)}
                   </Bar>
                 </BarChart>
               </ResponsiveContainer>
               <div className="flex flex-wrap gap-4 mt-2">
-                {testamentProgress.map((t) => (
-                  <div key={t.key} className="text-[11px]" style={{ color: PALETTE.muted }}>
-                    <span style={{ color: PALETTE.parchment, fontWeight: 600 }}>{t.label}:</span> {t.read}/{t.total} chapters
-                    {t.bookPasses > t.booksDoneOnce && (
-                      <span style={{ color: PALETTE.amber }}> · {t.bookPasses - t.booksDoneOnce} book{t.bookPasses - t.booksDoneOnce === 1 ? "" : "s"} re-read</span>
+                {testamentProgress.map((tst) => (
+                  <div key={tst.key} className="text-[11px]" style={{ color: PALETTE.muted }}>
+                    <span style={{ color: PALETTE.parchment, fontWeight: 600 }}>{tst.label}:</span> {tst.read}/{tst.total} {t("chapters", "إصحاحًا")}
+                    {tst.bookPasses > tst.booksDoneOnce && (
+                      <span style={{ color: PALETTE.amber }}> · {t(`${tst.bookPasses - tst.booksDoneOnce} book${tst.bookPasses - tst.booksDoneOnce === 1 ? "" : "s"} re-read`, `أُعيدت قراءة ${tst.bookPasses - tst.booksDoneOnce} سفرًا`)}</span>
                     )}
                   </div>
                 ))}
@@ -1436,12 +1682,12 @@ export default function LectioTracker() {
 
             {recent.length > 0 && (
               <Card>
-                <h3 className="lectio-display text-lg mb-3" style={{ color: PALETTE.parchment }}>Recent readings</h3>
+                <h3 className="lectio-display text-lg mb-3" style={{ color: PALETTE.parchment }}>{t("Recent readings", "القراءات الأخيرة")}</h3>
                 <div className="space-y-1">
                   {recent.map((r, i) => (
                     <button key={`${r.book}-${r.chapter}-${r.date}-${i}`} onClick={() => goToChapter(r.book, r.chapter)} className="w-full flex items-center justify-between px-3 py-2 rounded-lg text-sm" style={{ background: PALETTE.wood, color: PALETTE.parchment }}>
                       <span className="flex items-center gap-2">
-                        {r.book} {r.chapter}
+                        {bookLabel(r.book)} {r.chapter}
                         <RereadChip count={r.timesRead} />
                       </span>
                       <span style={{ color: PALETTE.gold }}>{fmtDate(r.date)}</span>
@@ -1462,14 +1708,14 @@ export default function LectioTracker() {
               className="text-xs rounded-md px-3 py-1.5 flex items-center gap-1.5"
               style={{ background: PALETTE.wood, color: PALETTE.parchment, border: `1px solid ${PALETTE.goldSoft}` }}
             >
-              <Download size={13} /> Backup data
+              <Download size={13} /> {t("Backup data", "نسخ احتياطي للبيانات")}
             </button>
             <button
               onClick={() => importInputRef.current && importInputRef.current.click()}
               className="text-xs rounded-md px-3 py-1.5 flex items-center gap-1.5"
               style={{ background: PALETTE.wood, color: PALETTE.parchment, border: `1px solid ${PALETTE.goldSoft}` }}
             >
-              <Upload size={13} /> Restore backup
+              <Upload size={13} /> {t("Restore backup", "استعادة النسخة الاحتياطية")}
             </button>
             <input
               ref={importInputRef}
@@ -1480,7 +1726,7 @@ export default function LectioTracker() {
             />
           </div>
           <div className="text-center text-[11px]" style={{ color: PALETTE.wood }}>
-            {saveState === "saving" ? "Saving…" : saveState === "error" ? "Couldn't save — your browser may be blocking local storage." : "Your reading log is saved on this device. Back it up regularly so you never lose it."}
+            {saveState === "saving" ? t("Saving…", "جارٍ الحفظ…") : saveState === "error" ? t("Couldn't save — your browser may be blocking local storage.", "تعذّر الحفظ — قد يكون متصفحك يمنع التخزين المحلي.") : t("Your reading log is saved on this device. Back it up regularly so you never lose it.", "سجل قراءتك محفوظ على هذا الجهاز. اعمل نسخة احتياطية بانتظام حتى لا تفقد بياناتك.")}
           </div>
         </div>
       </div>
