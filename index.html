@@ -101,6 +101,29 @@ const RAW_BOOKS = [
 const BOOKS = RAW_BOOKS.map(([name, chapters, testament, abbr]) => ({ name, chapters, testament, abbr }));
 const BOOK_BY_NAME = Object.fromEntries(BOOKS.map((b) => [b.name, b]));
 const TOTAL_CHAPTERS = BOOKS.reduce((s, b) => s + b.chapters, 0);
+
+// USFM book codes for API.Bible — covers the 66 books NKJV includes.
+// The 7 deuterocanonical books have no NKJV text (NKJV is a Protestant
+// translation), so they're intentionally left out of this map.
+const USFM_CODE = {
+  "Genesis": "GEN", "Exodus": "EXO", "Leviticus": "LEV", "Numbers": "NUM", "Deuteronomy": "DEU",
+  "Joshua": "JOS", "Judges": "JDG", "Ruth": "RUT", "1 Samuel": "1SA", "2 Samuel": "2SA",
+  "1 Kings": "1KI", "2 Kings": "2KI", "1 Chronicles": "1CH", "2 Chronicles": "2CH", "Ezra": "EZR",
+  "Nehemiah": "NEH", "Esther": "EST", "Job": "JOB", "Psalms": "PSA", "Proverbs": "PRO",
+  "Ecclesiastes": "ECC", "Song of Songs": "SNG", "Isaiah": "ISA", "Jeremiah": "JER", "Lamentations": "LAM",
+  "Ezekiel": "EZK", "Daniel": "DAN", "Hosea": "HOS", "Joel": "JOL", "Amos": "AMO",
+  "Obadiah": "OBA", "Jonah": "JON", "Micah": "MIC", "Nahum": "NAM", "Habakkuk": "HAB",
+  "Zephaniah": "ZEP", "Haggai": "HAG", "Zechariah": "ZEC", "Malachi": "MAL",
+  "Matthew": "MAT", "Mark": "MRK", "Luke": "LUK", "John": "JHN", "Acts": "ACT",
+  "Romans": "ROM", "1 Corinthians": "1CO", "2 Corinthians": "2CO", "Galatians": "GAL", "Ephesians": "EPH",
+  "Philippians": "PHP", "Colossians": "COL", "1 Thessalonians": "1TH", "2 Thessalonians": "2TH",
+  "1 Timothy": "1TI", "2 Timothy": "2TI", "Titus": "TIT", "Philemon": "PHM", "Hebrews": "HEB",
+  "James": "JAS", "1 Peter": "1PE", "2 Peter": "2PE", "1 John": "1JN", "2 John": "2JN",
+  "3 John": "3JN", "Jude": "JUD", "Revelation": "REV",
+};
+
+const APIBIBLE_KEY_STORAGE = "lectio-apibible-key";
+const APIBIBLE_ID_STORAGE = "lectio-apibible-nkjv-id";
 const testamentOf = (key) => TESTAMENTS.find((t) => t.key === key);
 const todayStr = () => new Date().toISOString().slice(0, 10);
 const DAY_MS = 86400000;
@@ -162,7 +185,7 @@ const BOOK_VERSES = {
 const TOTAL_VERSES = Object.values(BOOK_VERSES).reduce((a, v) => a + v, 0);
 
 const STORAGE_KEY = "lectio-readings-v2";
-const DATA_VERSION = 2; // bump this whenever the saved-data shape changes, and add a case to migrateData()
+const DATA_VERSION = 3; // bump this whenever the saved-data shape changes, and add a case to migrateData()
 const PROFILE_COLORS = [PALETTE.gold, PALETTE.amber, PALETTE.burgundy, PALETTE.slate, "#4E7C59", "#6B4E8C"];
 
 // Upgrades older saved payloads to the current shape. Add a new "if (data.dataVersion < N)"
@@ -190,7 +213,11 @@ function migrateData(raw) {
 
   const profiles = Array.isArray(data.profiles) ? data.profiles : [];
   const profileData = data.profileData && typeof data.profileData === "object" ? { ...data.profileData } : {};
-  profiles.forEach((p) => { if (!profileData[p.id]) profileData[p.id] = { readings: {} }; });
+  // v2 -> v3: each profile also gets a `notes` map for remembered verses.
+  profiles.forEach((p) => {
+    if (!profileData[p.id]) profileData[p.id] = { readings: {}, notes: {} };
+    if (!profileData[p.id].notes) profileData[p.id].notes = {};
+  });
   return { dataVersion: DATA_VERSION, profiles, profileData };
 }
 
@@ -213,6 +240,54 @@ function saveAppData(profiles, profileData) {
   }
 }
 
+// --- API.Bible (NKJV verse lookup) ---
+// The key lives in its own localStorage entry, separate from the reading
+// data, so it's never swept into an exported/imported backup file.
+function getApiBibleKey() {
+  try { return localStorage.getItem(APIBIBLE_KEY_STORAGE) || ""; } catch (e) { return ""; }
+}
+function setApiBibleKey(key) {
+  try { localStorage.setItem(APIBIBLE_KEY_STORAGE, key); return true; } catch (e) { return false; }
+}
+function getCachedNkjvId() {
+  try { return localStorage.getItem(APIBIBLE_ID_STORAGE) || ""; } catch (e) { return ""; }
+}
+function setCachedNkjvId(id) {
+  try { localStorage.setItem(APIBIBLE_ID_STORAGE, id); } catch (e) { /* ignore */ }
+}
+
+async function resolveNkjvBibleId(apiKey) {
+  const cached = getCachedNkjvId();
+  if (cached) return cached;
+  const res = await fetch("https://api.scripture.api.bible/v1/bibles?language=eng", { headers: { "api-key": apiKey } });
+  if (!res.ok) throw new Error(res.status === 401 ? "invalid-key" : "network");
+  const json = await res.json();
+  const match = (json.data || []).find((b) => (b.abbreviation || "").toUpperCase() === "NKJV")
+    || (json.data || []).find((b) => (b.name || "").toUpperCase().includes("NEW KING JAMES"));
+  if (!match) throw new Error("no-nkjv");
+  setCachedNkjvId(match.id);
+  return match.id;
+}
+
+// Step 1: verse references only, no text — keeps the picker from revealing
+// anything until a specific verse is chosen.
+async function fetchChapterVerseRefs(bibleId, apiKey, usfmBook, chapter) {
+  const chapterId = `${usfmBook}.${chapter}`;
+  const res = await fetch(`https://api.scripture.api.bible/v1/bibles/${bibleId}/chapters/${chapterId}/verses`, { headers: { "api-key": apiKey } });
+  if (!res.ok) throw new Error(res.status === 401 ? "invalid-key" : "network");
+  const json = await res.json();
+  return (json.data || []).map((v, i) => ({ id: v.id, number: i + 1 }));
+}
+
+// Step 2: the actual text — only called once a verse number is picked.
+async function fetchVerseText(bibleId, apiKey, verseId) {
+  const url = `https://api.scripture.api.bible/v1/bibles/${bibleId}/verses/${verseId}?content-type=text&include-verse-numbers=false&include-chapter-numbers=false&include-notes=false`;
+  const res = await fetch(url, { headers: { "api-key": apiKey } });
+  if (!res.ok) throw new Error(res.status === 401 ? "invalid-key" : "network");
+  const json = await res.json();
+  return (json.data && json.data.content ? json.data.content : "").trim();
+}
+
 const TOTAL_BOOKS = BOOKS.length;
 const BOOK_MILESTONES = [1, 5, 10, 25, 50, TOTAL_BOOKS].filter((n, i, arr) => n <= TOTAL_BOOKS && arr.indexOf(n) === i);
 const STREAK_MILESTONES = [3, 7, 14, 30, 100, 365];
@@ -223,6 +298,7 @@ export default function LectioTracker() {
   const [profileData, setProfileData] = useState({});
   const [activeProfileId, setActiveProfileId] = useState(null);
   const readings = (activeProfileId && profileData[activeProfileId] && profileData[activeProfileId].readings) || {};
+  const notes = (activeProfileId && profileData[activeProfileId] && profileData[activeProfileId].notes) || {};
 
   const [loaded, setLoaded] = useState(false);
   const [activeTab, setActiveTab] = useState("books");
@@ -243,13 +319,22 @@ export default function LectioTracker() {
   const [selected, setSelected] = useState(null); // { book, chapter }
   const [expandedStat, setExpandedStat] = useState(null);
 
+  const [apiKey, setApiKeyValue] = useState("");
+  const [showKeySettings, setShowKeySettings] = useState(false);
+
   useEffect(() => {
     const data = loadAppData();
     setProfiles(data.profiles);
     setProfileData(data.profileData);
     setActiveProfileId(null); // always land on the profile picker on a fresh load
+    setApiKeyValue(getApiBibleKey());
     setLoaded(true);
   }, []);
+
+  const saveApiKey = (key) => {
+    setApiKeyValue(key);
+    setApiBibleKey(key);
+  };
 
   const persist = useCallback((nextProfiles, nextProfileData) => {
     setSaveState("saving");
@@ -262,7 +347,7 @@ export default function LectioTracker() {
     setProfiles((prev) => {
       const nextProfiles = [...prev, { id, name, color: PROFILE_COLORS[prev.length % PROFILE_COLORS.length] }];
       setProfileData((prevData) => {
-        const nextData = { ...prevData, [id]: { readings: {} } };
+        const nextData = { ...prevData, [id]: { readings: {}, notes: {} } };
         persist(nextProfiles, nextData);
         return nextData;
       });
@@ -334,10 +419,35 @@ export default function LectioTracker() {
   const updateReadings = (updater) => {
     if (!activeProfileId) return;
     setProfileData((prev) => {
-      const currentReadings = (prev[activeProfileId] && prev[activeProfileId].readings) || {};
-      const nextReadings = updater(currentReadings);
-      const next = { ...prev, [activeProfileId]: { readings: nextReadings } };
+      const currentProfile = prev[activeProfileId] || { readings: {}, notes: {} };
+      const nextReadings = updater(currentProfile.readings || {});
+      const next = { ...prev, [activeProfileId]: { ...currentProfile, readings: nextReadings } };
       persist(profiles, next);
+      return next;
+    });
+  };
+
+  const updateNotes = (updater) => {
+    if (!activeProfileId) return;
+    setProfileData((prev) => {
+      const currentProfile = prev[activeProfileId] || { readings: {}, notes: {} };
+      const nextNotes = updater(currentProfile.notes || {});
+      const next = { ...prev, [activeProfileId]: { ...currentProfile, notes: nextNotes } };
+      persist(profiles, next);
+      return next;
+    });
+  };
+
+  const noteKeyFor = (book, chapter, verse) => `${book}::${chapter}::${verse}`;
+
+  const saveNote = (book, chapter, verse, text, reference) => {
+    updateNotes((prev) => ({ ...prev, [noteKeyFor(book, chapter, verse)]: { text, reference, savedAt: todayStr() } }));
+  };
+
+  const deleteNote = (book, chapter, verse) => {
+    updateNotes((prev) => {
+      const next = { ...prev };
+      delete next[noteKeyFor(book, chapter, verse)];
       return next;
     });
   };
@@ -1035,21 +1145,20 @@ export default function LectioTracker() {
     if (expandedStat === "chapters") {
       title = t("Chapters read", "الإصحاحات المقروءة");
       body = chaptersReadDetail.length ? (
-        <div className="space-y-3">
-          {chaptersReadDetail.map(({ book, chapters }) => (
-            <div key={book}>
-              <p className="text-xs font-semibold mb-1" style={{ color: PALETTE.parchment }}>
-                {bookLabel(book)} <span style={{ color: PALETTE.muted, fontWeight: 400 }}>({chapters.length})</span>
-              </p>
-              <div className="flex flex-wrap gap-1">
-                {chapters.map((c) => (
-                  <button key={c} onClick={() => goToChapter(book, c)} className="text-[11px] rounded-md px-2 py-0.5" style={{ background: PALETTE.bgSoft2, color: PALETTE.parchment, border: `1px solid ${PALETTE.wood}` }}>
-                    {c}
-                  </button>
-                ))}
-              </div>
-            </div>
-          ))}
+        <div className="space-y-1.5">
+          {chaptersReadDetail.map(({ book, chapters }) => {
+            const total = BOOK_BY_NAME[book].chapters;
+            const pct = Math.round((chapters.length / total) * 100);
+            return (
+              <button key={book} onClick={() => { setActiveTab("books"); openBook(BOOK_BY_NAME[book]); }} className="w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm" style={{ background: PALETTE.bgSoft2, color: PALETTE.parchment }}>
+                <span className="flex-1 text-left truncate">{bookLabel(book)}</span>
+                <div className="w-16 h-1.5 rounded-full overflow-hidden flex-shrink-0" style={{ background: PALETTE.wood }}>
+                  <div style={{ width: `${pct}%`, height: "100%", background: PALETTE.gold }} />
+                </div>
+                <span className="flex-shrink-0 text-xs font-semibold" style={{ color: PALETTE.gold, minWidth: 34, textAlign: "right" }}>{chapters.length}/{total}</span>
+              </button>
+            );
+          })}
         </div>
       ) : <p className="text-sm" style={{ color: PALETTE.muted }}>{t("No chapters read yet in this scope.", "لم تُقرأ أي إصحاحات بعد ضمن هذا النطاق.")}</p>;
     }
@@ -1249,6 +1358,139 @@ export default function LectioTracker() {
                 </div>
               ))}
             </div>
+          </div>
+        )}
+
+        <VerseNotes book={book} chapter={chapter} />
+      </div>
+    );
+  };
+
+  // Verse-remembering picker: shows a 1..N dropdown of verse numbers with no
+  // text until one is chosen (step 1: references only), fetches that verse's
+  // NKJV text on selection (step 2), and lets it be trimmed before saving.
+  const VerseNotes = ({ book, chapter }) => {
+    const usfm = USFM_CODE[book];
+    const savedForChapter = Object.entries(notes).filter(([k]) => k.startsWith(`${book}::${chapter}::`));
+
+    const [open, setOpen] = useState(false);
+    const [verseRefs, setVerseRefs] = useState(null); // [{id, number}] once fetched
+    const [status, setStatus] = useState("idle"); // idle | loading-refs | loading-text | ready | error
+    const [errorMsg, setErrorMsg] = useState("");
+    const [pickedVerse, setPickedVerse] = useState("");
+    const [draftText, setDraftText] = useState("");
+
+    const openPicker = async () => {
+      setOpen(true);
+      if (verseRefs || !usfm) return;
+      if (!apiKey) { setStatus("error"); setErrorMsg(t("Add your API.Bible key in Settings first.", "أضف مفتاح API.Bible في الإعدادات أولاً.")); return; }
+      setStatus("loading-refs");
+      try {
+        const bibleId = await resolveNkjvBibleId(apiKey);
+        const refs = await fetchChapterVerseRefs(bibleId, apiKey, usfm, chapter);
+        setVerseRefs(refs);
+        setStatus("idle");
+      } catch (err) {
+        setStatus("error");
+        setErrorMsg(
+          err.message === "invalid-key" ? t("That API key was rejected — check it in Settings.", "تم رفض مفتاح API — تحقق منه في الإعدادات.")
+          : err.message === "no-nkjv" ? t("Couldn't find NKJV on this API key's account.", "تعذّر العثور على NKJV ضمن هذا المفتاح.")
+          : t("Couldn't reach API.Bible — try again.", "تعذّر الوصول إلى API.Bible — حاول مجددًا.")
+        );
+      }
+    };
+
+    const pickVerse = async (num) => {
+      setPickedVerse(num);
+      setDraftText("");
+      if (!num) return;
+      setStatus("loading-text");
+      try {
+        const bibleId = await resolveNkjvBibleId(apiKey);
+        const ref = verseRefs.find((v) => v.number === Number(num));
+        const text = await fetchVerseText(bibleId, apiKey, ref.id);
+        setDraftText(text);
+        setStatus("ready");
+      } catch (err) {
+        setStatus("error");
+        setErrorMsg(t("Couldn't fetch that verse — try again.", "تعذّر جلب هذا الشاهد — حاول مجددًا."));
+      }
+    };
+
+    const save = () => {
+      if (!pickedVerse || !draftText.trim()) return;
+      saveNote(book, chapter, pickedVerse, draftText.trim(), `${bookLabel(book)} ${chapter}:${pickedVerse}`);
+      setOpen(false); setPickedVerse(""); setDraftText(""); setStatus("idle");
+    };
+
+    return (
+      <div className="mt-4 pt-4" style={{ borderTop: `1px solid ${PALETTE.inkSoft}` }}>
+        {savedForChapter.length > 0 && (
+          <div className="space-y-2 mb-3">
+            {savedForChapter.map(([k, note]) => (
+              <div key={k} className="rounded-lg p-2.5" style={{ background: "rgba(255,255,255,0.5)", border: `1px solid ${PALETTE.inkSoft}` }}>
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-[11px] font-semibold" style={{ color: PALETTE.burgundy }}>{note.reference}</span>
+                  <button onClick={() => deleteNote(book, chapter, k.split("::")[2])} className="rounded p-1" style={{ color: PALETTE.inkSoft }}>
+                    <Trash2 size={12} />
+                  </button>
+                </div>
+                <p className="text-sm italic" style={{ color: PALETTE.ink }}>{note.text}</p>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {!open ? (
+          <button onClick={openPicker} className="text-xs flex items-center gap-1.5 rounded-full px-3 py-1.5" style={{ background: PALETTE.ink, color: PALETTE.parchment }}>
+            <BookMarked size={12} /> {t("Remember a verse", "احفظ شاهدًا")}
+          </button>
+        ) : (
+          <div className="rounded-lg p-3" style={{ background: "rgba(255,255,255,0.5)", border: `1px solid ${PALETTE.inkSoft}` }}>
+            {!usfm ? (
+              <p className="text-xs" style={{ color: PALETTE.inkSoft }}>{t("NKJV doesn't include this book (it's not in the 66-book Protestant canon).", "لا يتضمن NKJV هذا السفر (ليس ضمن الأسفار الـ66).")}</p>
+            ) : status === "loading-refs" ? (
+              <p className="text-xs" style={{ color: PALETTE.inkSoft }}>{t("Loading verse list…", "جارٍ تحميل قائمة الآيات…")}</p>
+            ) : status === "error" && !verseRefs ? (
+              <p className="text-xs" style={{ color: PALETTE.burgundy }}>{errorMsg}</p>
+            ) : (
+              <>
+                <div className="flex items-center gap-2 mb-2">
+                  <select
+                    value={pickedVerse}
+                    onChange={(e) => pickVerse(e.target.value)}
+                    className="text-sm rounded-md px-2 py-1.5 outline-none"
+                    style={{ background: "#fff", border: `1px solid ${PALETTE.inkSoft}`, color: PALETTE.ink }}
+                  >
+                    <option value="">{t("Verse #…", "رقم الآية…")}</option>
+                    {(verseRefs || []).map((v) => <option key={v.id} value={v.number}>{v.number}</option>)}
+                  </select>
+                  {status === "loading-text" && <span className="text-xs" style={{ color: PALETTE.inkSoft }}>{t("Fetching…", "جارٍ الجلب…")}</span>}
+                  {status === "error" && verseRefs && <span className="text-xs" style={{ color: PALETTE.burgundy }}>{errorMsg}</span>}
+                </div>
+                {pickedVerse && status === "ready" && (
+                  <>
+                    <p className="text-[11px] font-semibold mb-1" style={{ color: PALETTE.burgundy }}>{bookLabel(book)} {chapter}:{pickedVerse} (NKJV)</p>
+                    <textarea
+                      value={draftText}
+                      onChange={(e) => setDraftText(e.target.value)}
+                      rows={3}
+                      className="w-full text-sm rounded-md px-2 py-1.5 outline-none mb-2"
+                      style={{ background: "#fff", border: `1px solid ${PALETTE.inkSoft}`, color: PALETTE.ink }}
+                    />
+                    <p className="text-[10px] mb-2" style={{ color: PALETTE.inkSoft }}>{t("Trim it down to just the part you want to remember, if you like.", "اختصره ليقتصر على الجزء الذي تريد تذكّره، إن أردت.")}</p>
+                  </>
+                )}
+                <div className="flex gap-2">
+                  <button onClick={save} disabled={!pickedVerse || !draftText.trim()} className="text-xs rounded-full px-3 py-1.5" style={{ background: PALETTE.ink, color: PALETTE.parchment, opacity: (!pickedVerse || !draftText.trim()) ? 0.5 : 1 }}>
+                    {t("Save", "حفظ")}
+                  </button>
+                  <button onClick={() => { setOpen(false); setPickedVerse(""); setDraftText(""); setStatus("idle"); }} className="text-xs rounded-full px-3 py-1.5" style={{ background: "transparent", color: PALETTE.inkSoft, border: `1px solid ${PALETTE.inkSoft}` }}>
+                    {t("Cancel", "إلغاء")}
+                  </button>
+                </div>
+              </>
+            )}
           </div>
         )}
       </div>
@@ -1724,11 +1966,42 @@ export default function LectioTracker() {
               className="hidden"
               onChange={(e) => { const f = e.target.files && e.target.files[0]; if (f) importData(f); e.target.value = ""; }}
             />
+            <button
+              onClick={() => setShowKeySettings(true)}
+              className="text-xs rounded-md px-3 py-1.5 flex items-center gap-1.5"
+              style={{ background: PALETTE.wood, color: PALETTE.parchment, border: `1px solid ${PALETTE.goldSoft}` }}
+            >
+              <Lock size={13} /> {t("NKJV API Key", "مفتاح NKJV")}
+            </button>
           </div>
           <div className="text-center text-[11px]" style={{ color: PALETTE.wood }}>
             {saveState === "saving" ? t("Saving…", "جارٍ الحفظ…") : saveState === "error" ? t("Couldn't save — your browser may be blocking local storage.", "تعذّر الحفظ — قد يكون متصفحك يمنع التخزين المحلي.") : t("Your reading log is saved on this device. Back it up regularly so you never lose it.", "سجل قراءتك محفوظ على هذا الجهاز. اعمل نسخة احتياطية بانتظام حتى لا تفقد بياناتك.")}
           </div>
         </div>
+
+        {showKeySettings && (
+          <div className="fixed inset-0 flex items-center justify-center p-4 z-50" style={{ background: "rgba(0,0,0,0.6)" }} onClick={() => setShowKeySettings(false)}>
+            <div className="rounded-2xl p-5 max-w-sm w-full" style={{ background: PALETTE.bgSoft, border: `1px solid ${PALETTE.goldSoft}` }} onClick={(e) => e.stopPropagation()}>
+              <h3 className="lectio-display text-lg mb-2" style={{ color: PALETTE.parchment }}>{t("API.Bible Key", "مفتاح API.Bible")}</h3>
+              <p className="text-xs mb-3" style={{ color: PALETTE.muted }}>
+                {t("Used only to fetch NKJV verse text when you tap \"Remember a verse.\" Get a free key at ", "يُستخدم فقط لجلب نص NKJV عند الضغط على \"احفظ شاهدًا\". احصل على مفتاح مجاني من ")}
+                <a href="https://scripture.api.bible" target="_blank" rel="noreferrer" style={{ color: PALETTE.gold }}>scripture.api.bible</a>.
+                {" "}{t("Stored only in this browser — never included in backup files.", "يُخزَّن في هذا المتصفح فقط — لا يُدرج أبدًا في ملفات النسخ الاحتياطي.")}
+              </p>
+              <input
+                type="password"
+                defaultValue={apiKey}
+                onBlur={(e) => saveApiKey(e.target.value.trim())}
+                placeholder={t("Paste your API key", "الصق مفتاح API الخاص بك")}
+                className="w-full text-sm rounded-md px-3 py-2 outline-none mb-3"
+                style={{ background: PALETTE.bgSoft2, border: `1px solid ${PALETTE.wood}`, color: PALETTE.parchment }}
+              />
+              <button onClick={() => setShowKeySettings(false)} className="text-xs rounded-full px-4 py-2 w-full" style={{ background: PALETTE.gold, color: PALETTE.ink }}>
+                {t("Done", "تم")}
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
