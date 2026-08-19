@@ -805,7 +805,7 @@ export default function LectioTracker() {
     return { agpeyaCurrentStreak: gap <= 1 ? cur : 0, agpeyaLongestStreak: best };
   }, [agpeyaFullDates]);
 
-  // Last 7 days (oldest -> today) and last 30 days, each with a 0-7 prayer count — for the weekly strip and heatmap.
+  // Last 7 days (oldest -> today), each with a 0-7 prayer count — for the weekly strip.
   const agpeyaLastNDays = (n) => {
     const out = [];
     for (let i = n - 1; i >= 0; i--) {
@@ -816,13 +816,19 @@ export default function LectioTracker() {
     return out;
   };
   const agpeyaWeekly = useMemo(() => agpeyaLastNDays(7), [agpeya]);
-  const agpeyaHeatmap = useMemo(() => agpeyaLastNDays(30), [agpeya]);
 
   const agpeyaPrayerTotals = useMemo(
     () => AGPEYA_PRAYERS.map((p) => ({ ...p, total: Object.values(agpeya).filter((rec) => rec[p.id]).length })),
     [agpeya]
   );
+  // "Days prayed" = any day with at least one prayer logged (not necessarily a
+  // streak, and not necessarily all 7). "Total prayers" = every single prayer
+  // logged, summed across every day — e.g. 30 days prayed, 73 prayers total.
   const agpeyaTotalDaysTracked = Object.keys(agpeya).length;
+  const agpeyaTotalPrayers = useMemo(
+    () => Object.values(agpeya).reduce((sum, rec) => sum + Object.keys(rec).length, 0),
+    [agpeya]
+  );
 
   // How many chapters were read (for the first time) or books were finished,
   // bucketed by month or year — for the "Reading history" chart.
@@ -1874,11 +1880,12 @@ export default function LectioTracker() {
           </div>
         </Card>
 
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
           <StatCard icon={<Flame size={16} color={PALETTE.gold} />} label={t("Current streak", "السلسلة الحالية")} value={t(`${agpeyaCurrentStreak}d`, `${agpeyaCurrentStreak} يومًا`)} />
           <StatCard icon={<Flame size={16} color={PALETTE.goldSoft} />} label={t("Longest streak", "أطول سلسلة")} value={t(`${agpeyaLongestStreak}d`, `${agpeyaLongestStreak} يومًا`)} />
           <StatCard icon={<CheckCircle2 size={16} color={PALETTE.gold} />} label={t("Full days", "أيام كاملة")} value={agpeyaFullDates.length} sub={t("all 7 prayed", "كل الصلوات السبع")} />
-          <StatCard icon={<Calendar size={16} color={PALETTE.gold} />} label={t("Days tracked", "أيام مسجّلة")} value={agpeyaTotalDaysTracked} />
+          <StatCard icon={<Calendar size={16} color={PALETTE.gold} />} label={t("Days prayed", "أيام صلّيت فيها")} value={agpeyaTotalDaysTracked} sub={t("at least 1 prayer", "صلاة واحدة على الأقل")} />
+          <StatCard icon={<ListChecks size={16} color={PALETTE.gold} />} label={t("Total prayers", "إجمالي الصلوات")} value={agpeyaTotalPrayers} sub={t(`across ${agpeyaTotalDaysTracked} days`, `عبر ${agpeyaTotalDaysTracked} يومًا`)} />
         </div>
 
         <Card>
@@ -1896,20 +1903,6 @@ export default function LectioTracker() {
                 </div>
               </div>
             ))}
-          </div>
-        </Card>
-
-        <Card>
-          <h3 className="lectio-display text-lg mb-3" style={{ color: PALETTE.parchment }}>{t("Last 30 days", "آخر 30 يومًا")}</h3>
-          <div className="flex flex-wrap gap-1.5">
-            {agpeyaHeatmap.map((d) => (
-              <div key={d.date} title={`${d.date}: ${d.count}/7`} className="rounded" style={{ width: 20, height: 20, background: heatColor(d.count) }} />
-            ))}
-          </div>
-          <div className="flex items-center gap-2 mt-3">
-            <span className="text-[10px]" style={{ color: PALETTE.muted }}>{t("Less", "أقل")}</span>
-            {[0, 2, 5, 7].map((c) => <div key={c} className="rounded" style={{ width: 12, height: 12, background: heatColor(c) }} />)}
-            <span className="text-[10px]" style={{ color: PALETTE.muted }}>{t("More", "أكثر")}</span>
           </div>
         </Card>
 
