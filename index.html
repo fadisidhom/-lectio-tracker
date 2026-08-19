@@ -21,7 +21,8 @@
     "react-dom": "https://esm.sh/react-dom@18.3.1",
     "react-dom/client": "https://esm.sh/react-dom@18.3.1/client?deps=react@18.3.1",
     "recharts": "https://esm.sh/recharts@2.12.7?deps=react@18.3.1,react-dom@18.3.1",
-    "lucide-react": "https://esm.sh/lucide-react@0.383.0?deps=react@18.3.1"
+    "lucide-react": "https://esm.sh/lucide-react@0.383.0?deps=react@18.3.1",
+    "@supabase/supabase-js": "https://esm.sh/@supabase/supabase-js@2"
   }
 }
 </script>
@@ -47,6 +48,7 @@
 <script type="text/babel" data-type="module" data-presets="react">
 import React, { useState, useEffect, useMemo, useCallback } from "react";
 import ReactDOM from "react-dom/client";
+import { createClient } from "@supabase/supabase-js";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, Cell as RCell,
@@ -274,6 +276,51 @@ function saveAppData(profiles, profileData) {
   }
 }
 
+// --- Supabase (family-wide cloud sync) ---
+// The URL and publishable key below are meant to be public — Supabase's anon
+// key is designed to be embedded in client code, with access controlled by
+// the RLS policies on the database itself, not by keeping this key secret.
+const SUPABASE_URL = "https://umrfejcsnjhyswnyhzon.supabase.co";
+const SUPABASE_ANON_KEY = "sb_publishable_gPmimJf6K8OF2ZlTCBsu_g_uT76mKYJ";
+const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+async function fetchCloudData() {
+  const { data: profileRows, error: pErr } = await supabase.from("profiles").select("*").order("created_at", { ascending: true });
+  if (pErr) throw pErr;
+  const { data: dataRows, error: dErr } = await supabase.from("profile_data").select("*");
+  if (dErr) throw dErr;
+  const profiles = (profileRows || []).map((r) => ({ id: r.id, name: r.name, color: r.color }));
+  const profileData = {};
+  (dataRows || []).forEach((r) => {
+    profileData[r.profile_id] = { readings: r.readings || {}, notes: r.notes || {}, agpeya: r.agpeya || {} };
+  });
+  profiles.forEach((p) => { if (!profileData[p.id]) profileData[p.id] = { readings: {}, notes: {}, agpeya: {} }; });
+  return { profiles, profileData };
+}
+
+async function pushCloudData(profiles, profileData) {
+  if (profiles.length) {
+    const { error } = await supabase.from("profiles").upsert(profiles.map((p) => ({ id: p.id, name: p.name, color: p.color })));
+    if (error) throw error;
+  }
+  const rows = Object.keys(profileData).map((id) => ({
+    profile_id: id,
+    readings: profileData[id].readings || {},
+    notes: profileData[id].notes || {},
+    agpeya: profileData[id].agpeya || {},
+    updated_at: new Date().toISOString(),
+  }));
+  if (rows.length) {
+    const { error } = await supabase.from("profile_data").upsert(rows);
+    if (error) throw error;
+  }
+}
+
+async function deleteCloudProfile(id) {
+  const { error } = await supabase.from("profiles").delete().eq("id", id);
+  if (error) throw error;
+}
+
 // --- API.Bible (NKJV verse lookup) ---
 // The key lives in its own localStorage entry, separate from the reading
 // data, so it's never swept into an exported/imported backup file.
@@ -357,14 +404,66 @@ export default function LectioTracker() {
   const [apiKey, setApiKeyValue] = useState("");
   const [showKeySettings, setShowKeySettings] = useState(false);
   const [certModal, setCertModal] = useState(null); // { type: "book", book: name } | { type: "canon" } | null
+  const [cloudStatus, setCloudStatus] = useState("connecting"); // "connecting" | "online" | "offline"
 
   useEffect(() => {
-    const data = loadAppData();
-    setProfiles(data.profiles);
-    setProfileData(data.profileData);
-    setActiveProfileId(null); // always land on the profile picker on a fresh load
-    setApiKeyValue(getApiBibleKey());
-    setLoaded(true);
+    let cancelled = false;
+    (async () => {
+      const local = loadAppData();
+      let finalProfiles = local.profiles;
+      let finalProfileData = local.profileData;
+      let status = "offline";
+      try {
+        const cloud = await fetchCloudData();
+        if (cloud.profiles.length === 0 && local.profiles.length > 0) {
+          const shouldMigrate = window.confirm(
+            "We found existing progress on this device that isn't in the cloud yet. Upload it now so it syncs across your family's devices?"
+          );
+          if (shouldMigrate) {
+            await pushCloudData(local.profiles, local.profileData);
+            // finalProfiles/finalProfileData already point at local — leave as is.
+          } else {
+            finalProfiles = cloud.profiles;
+            finalProfileData = cloud.profileData;
+          }
+        } else {
+          finalProfiles = cloud.profiles;
+          finalProfileData = cloud.profileData;
+        }
+        status = "online";
+      } catch (e) {
+        status = "offline"; // couldn't reach Supabase — fall back to the last-synced local copy
+      }
+      if (cancelled) return;
+      setProfiles(finalProfiles);
+      setProfileData(finalProfileData);
+      saveAppData(finalProfiles, finalProfileData); // refresh the local fallback cache either way
+      setCloudStatus(status);
+      setActiveProfileId(null); // always land on the profile picker on a fresh load
+      setApiKeyValue(getApiBibleKey());
+      setLoaded(true);
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  // Live sync: when another device changes profiles or their data, pull the
+  // latest and update our own view — this is what makes it feel "seamless"
+  // across devices rather than needing a manual refresh.
+  useEffect(() => {
+    const channel = supabase
+      .channel("lectio-sync")
+      .on("postgres_changes", { event: "*", schema: "public", table: "profiles" }, () => {
+        fetchCloudData()
+          .then((cloud) => { setProfiles(cloud.profiles); setProfileData(cloud.profileData); saveAppData(cloud.profiles, cloud.profileData); setCloudStatus("online"); })
+          .catch(() => setCloudStatus("offline"));
+      })
+      .on("postgres_changes", { event: "*", schema: "public", table: "profile_data" }, () => {
+        fetchCloudData()
+          .then((cloud) => { setProfiles(cloud.profiles); setProfileData(cloud.profileData); saveAppData(cloud.profiles, cloud.profileData); setCloudStatus("online"); })
+          .catch(() => setCloudStatus("offline"));
+      })
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
   }, []);
 
   const saveApiKey = (key) => {
@@ -374,8 +473,10 @@ export default function LectioTracker() {
 
   const persist = useCallback((nextProfiles, nextProfileData) => {
     setSaveState("saving");
-    const ok = saveAppData(nextProfiles, nextProfileData);
-    setSaveState(ok ? "idle" : "error");
+    const localOk = saveAppData(nextProfiles, nextProfileData);
+    pushCloudData(nextProfiles, nextProfileData)
+      .then(() => { setSaveState(localOk ? "idle" : "error"); setCloudStatus("online"); })
+      .catch(() => { setSaveState(localOk ? "idle" : "error"); setCloudStatus("offline"); });
   }, []);
 
   const addProfile = (name) => {
@@ -407,6 +508,7 @@ export default function LectioTracker() {
         const nextData = { ...prevData };
         delete nextData[id];
         persist(nextProfiles, nextData);
+        deleteCloudProfile(id).catch(() => {});
         return nextData;
       });
       return nextProfiles;
@@ -2339,7 +2441,15 @@ export default function LectioTracker() {
             </button>
           </div>
           <div className="text-center text-[11px]" style={{ color: PALETTE.wood }}>
-            {saveState === "saving" ? t("Saving…", "جارٍ الحفظ…") : saveState === "error" ? t("Couldn't save — your browser may be blocking local storage.", "تعذّر الحفظ — قد يكون متصفحك يمنع التخزين المحلي.") : t("Your reading log is saved on this device. Back it up regularly so you never lose it.", "سجل قراءتك محفوظ على هذا الجهاز. اعمل نسخة احتياطية بانتظام حتى لا تفقد بياناتك.")}
+            {saveState === "saving"
+              ? t("Saving…", "جارٍ الحفظ…")
+              : cloudStatus === "offline"
+              ? t("Offline — showing your last synced copy. Changes will sync once you're back online.", "غير متصل — تُعرض آخر نسخة تمت مزامنتها. ستتم المزامنة عند الاتصال مجددًا.")
+              : cloudStatus === "connecting"
+              ? t("Connecting…", "جارٍ الاتصال…")
+              : saveState === "error"
+              ? t("Couldn't save — your browser may be blocking local storage.", "تعذّر الحفظ — قد يكون متصفحك يمنع التخزين المحلي.")
+              : t("Synced with your family's shared progress.", "تمت المزامنة مع تقدم عائلتك المشترك.")}
           </div>
         </div>
 
