@@ -162,6 +162,50 @@ const AGPEYA_PRAYERS_AR = {
 const testamentOf = (key) => TESTAMENTS.find((t) => t.key === key);
 const todayStr = () => new Date().toISOString().slice(0, 10);
 const DAY_MS = 86400000;
+
+// Computes leaderboard-comparable stats for any single profile's data.
+// Pure function (no React/component dependency) so it can run over every
+// profile at once, not just whichever one is currently active.
+function computeProfileStats(pd) {
+  const readings = (pd && pd.readings) || {};
+  const agpeya = (pd && pd.agpeya) || {};
+
+  const chapterKeys = Object.keys(readings).filter((k) => readings[k] && readings[k].length > 0);
+  const chaptersRead = chapterKeys.length;
+  const readChaptersByBook = {};
+  chapterKeys.forEach((k) => {
+    const book = k.split("::")[0];
+    readChaptersByBook[book] = (readChaptersByBook[book] || 0) + 1;
+  });
+  const booksCompleted = BOOKS.filter((b) => (readChaptersByBook[b.name] || 0) >= b.chapters).length;
+
+  const readingDates = [...new Set(chapterKeys.flatMap((k) => (readings[k] || []).map((e) => e.date)))].sort();
+  let longestStreak = 0;
+  if (readingDates.length) {
+    let best = 1, cur = 1;
+    for (let i = 1; i < readingDates.length; i++) {
+      const diff = Math.round((new Date(readingDates[i] + "T00:00:00") - new Date(readingDates[i - 1] + "T00:00:00")) / DAY_MS);
+      cur = diff === 1 ? cur + 1 : 1;
+      if (cur > best) best = cur;
+    }
+    longestStreak = best;
+  }
+
+  const totalPrayers = Object.values(agpeya).reduce((s, rec) => s + Object.keys(rec || {}).length, 0);
+  const fullDates = Object.keys(agpeya).filter((d) => AGPEYA_PRAYERS.every((p) => agpeya[d] && agpeya[d][p.id])).sort();
+  let longestAgpeyaStreak = 0;
+  if (fullDates.length) {
+    let best = 1, cur = 1;
+    for (let i = 1; i < fullDates.length; i++) {
+      const diff = Math.round((new Date(fullDates[i] + "T00:00:00") - new Date(fullDates[i - 1] + "T00:00:00")) / DAY_MS);
+      cur = diff === 1 ? cur + 1 : 1;
+      if (cur > best) best = cur;
+    }
+    longestAgpeyaStreak = best;
+  }
+
+  return { chaptersRead, booksCompleted, longestStreak, totalPrayers, longestAgpeyaStreak };
+}
 const fmtDate = (d) =>
   new Date(d + "T00:00:00").toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
 const fmtDateShort = (d) =>
@@ -2025,12 +2069,10 @@ export default function LectioTracker() {
           </div>
         </Card>
 
-        <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-          <StatCard icon={<Flame size={16} color={PALETTE.gold} />} label={t("Current streak", "السلسلة الحالية")} value={t(`${agpeyaCurrentStreak}d`, `${agpeyaCurrentStreak} يومًا`)} />
-          <StatCard icon={<Flame size={16} color={PALETTE.goldSoft} />} label={t("Longest streak", "أطول سلسلة")} value={t(`${agpeyaLongestStreak}d`, `${agpeyaLongestStreak} يومًا`)} />
-          <StatCard icon={<CheckCircle2 size={16} color={PALETTE.gold} />} label={t("Full days", "أيام كاملة")} value={agpeyaFullDates.length} sub={t("all 7 prayed", "كل الصلوات السبع")} />
-          <StatCard icon={<Calendar size={16} color={PALETTE.gold} />} label={t("Days prayed", "أيام صلّيت فيها")} value={agpeyaTotalDaysTracked} sub={t("at least 1 prayer", "صلاة واحدة على الأقل")} />
-          <StatCard icon={<ListChecks size={16} color={PALETTE.gold} />} label={t("Total prayers", "إجمالي الصلوات")} value={agpeyaTotalPrayers} sub={t(`across ${agpeyaTotalDaysTracked} days`, `عبر ${agpeyaTotalDaysTracked} يومًا`)} />
+        <div className="grid grid-cols-3 gap-3">
+          <StatCard icon={<Calendar size={16} color={PALETTE.gold} />} label={t("Days prayed", "أيام صلّيت فيها")} value={agpeyaTotalDaysTracked} />
+          <StatCard icon={<ListChecks size={16} color={PALETTE.gold} />} label={t("Total prayers", "إجمالي الصلوات")} value={agpeyaTotalPrayers} />
+          <StatCard icon={<Flame size={16} color={PALETTE.gold} />} label={t("Longest streak", "أطول سلسلة")} value={t(`${agpeyaLongestStreak}d`, `${agpeyaLongestStreak} يومًا`)} />
         </div>
 
         <Card>
@@ -2053,21 +2095,90 @@ export default function LectioTracker() {
 
         <Card>
           <h3 className="lectio-display text-lg mb-3" style={{ color: PALETTE.parchment }}>{t("Per-prayer totals", "إجمالي كل صلاة")}</h3>
-          <div className="space-y-1.5">
+          <div className="grid gap-2.5" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(140px, 1fr))" }}>
             {agpeyaPrayerTotals.map((p) => {
               const pct = agpeyaTotalDaysTracked ? Math.round((p.total / agpeyaTotalDaysTracked) * 100) : 0;
               return (
-                <div key={p.id} className="flex items-center gap-3">
-                  <span className="text-sm flex-shrink-0" style={{ color: PALETTE.parchment, width: 90 }}>{t(p.name, AGPEYA_PRAYERS_AR[p.id])}</span>
-                  <div className="flex-1 h-1.5 rounded-full overflow-hidden" style={{ background: PALETTE.wood }}>
+                <div key={p.id} className="rounded-xl p-3" style={{ background: PALETTE.bgSoft2, border: `1px solid ${PALETTE.wood}` }}>
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-xs font-semibold truncate" style={{ color: PALETTE.parchment }}>{t(p.name, AGPEYA_PRAYERS_AR[p.id])}</span>
+                    <span className="text-sm font-semibold flex-shrink-0" style={{ color: PALETTE.gold }}>{p.total}</span>
+                  </div>
+                  <div className="w-full h-1.5 rounded-full overflow-hidden" style={{ background: PALETTE.wood }}>
                     <div style={{ width: `${pct}%`, height: "100%", background: PALETTE.gold }} />
                   </div>
-                  <span className="text-xs flex-shrink-0" style={{ color: PALETTE.muted, width: 34, textAlign: "right" }}>{p.total}</span>
                 </div>
               );
             })}
           </div>
         </Card>
+      </div>
+    );
+  };
+
+  const LeaderboardTab = () => {
+    const categories = [
+      { key: "chaptersRead", icon: CheckCircle2, label: t("Total chapters read", "إجمالي الإصحاحات المقروءة"), unit: t("chapters", "إصحاحًا") },
+      { key: "booksCompleted", icon: Library, label: t("Books completed", "الأسفار المكتملة"), unit: t("books", "سفرًا") },
+      { key: "longestStreak", icon: Flame, label: t("Longest Bible streak", "أطول سلسلة قراءة"), unit: t("days", "يومًا") },
+      { key: "totalPrayers", icon: BookMarked, label: t("Total Agpeya prayers", "إجمالي صلوات الأجبية"), unit: t("prayers", "صلاة") },
+      { key: "longestAgpeyaStreak", icon: Flame, label: t("Longest Agpeya streak", "أطول سلسلة أجبية"), unit: t("days", "يومًا") },
+    ];
+
+    const ranked = leaderboardStats; // [{ profile, stats }], already computed above
+
+    if (ranked.length < 2) {
+      return (
+        <Card>
+          <p className="text-sm text-center py-6" style={{ color: PALETTE.muted }}>
+            {t("Add another profile to start comparing progress.", "أضف ملفًا آخر لبدء مقارنة التقدم.")}
+          </p>
+        </Card>
+      );
+    }
+
+    return (
+      <div className="space-y-5 lectio-fade-in">
+        {categories.map((cat) => {
+          const Icon = cat.icon;
+          const sorted = [...ranked].sort((a, b) => b.stats[cat.key] - a.stats[cat.key]);
+          return (
+            <Card key={cat.key}>
+              <div className="flex items-center gap-2 mb-3">
+                <Icon size={16} color={PALETTE.gold} />
+                <h3 className="lectio-display text-lg" style={{ color: PALETTE.parchment }}>{cat.label}</h3>
+              </div>
+              <div className="space-y-1.5">
+                {sorted.map(({ profile: p, stats }, i) => {
+                  const isYou = p.id === activeProfileId;
+                  const isLeader = i === 0 && stats[cat.key] > 0;
+                  return (
+                    <div
+                      key={p.id}
+                      className="flex items-center gap-3 px-3 py-2 rounded-lg"
+                      style={{ background: isYou ? PALETTE.bgSoft2 : "transparent", border: `1px solid ${isYou ? PALETTE.goldSoft : "transparent"}` }}
+                    >
+                      <span className="text-xs font-semibold flex-shrink-0" style={{ width: 18, color: isLeader ? PALETTE.gold : PALETTE.muted }}>{i + 1}</span>
+                      <span
+                        className="rounded-full flex items-center justify-center lectio-display flex-shrink-0"
+                        style={{ width: 26, height: 26, background: `linear-gradient(150deg, ${p.color}, ${PALETTE.bgSoft2})`, color: PALETTE.parchment, fontSize: 13 }}
+                      >
+                        {p.name.trim().charAt(0).toUpperCase()}
+                      </span>
+                      <span className="text-sm flex-1 truncate" style={{ color: PALETTE.parchment }}>
+                        {p.name}{isYou && <span style={{ color: PALETTE.muted }}> ({t("You", "أنت")})</span>}
+                      </span>
+                      {isLeader && <Award size={14} color={PALETTE.gold} />}
+                      <span className="text-sm font-semibold flex-shrink-0" style={{ color: PALETTE.gold }}>
+                        {stats[cat.key]} <span className="text-[10px] font-normal" style={{ color: PALETTE.muted }}>{cat.unit}</span>
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            </Card>
+          );
+        })}
       </div>
     );
   };
@@ -2280,6 +2391,13 @@ export default function LectioTracker() {
     );
   };
 
+  // Leaderboard: the same stats computed for every profile, not just the
+  // active one — profileData already holds everyone's synced data.
+  const leaderboardStats = useMemo(
+    () => profiles.map((p) => ({ profile: p, stats: computeProfileStats(profileData[p.id]) })),
+    [profiles, profileData]
+  );
+
   if (!loaded) {
     return (
       <div className="lectio-root flex items-center justify-center p-10" style={{ background: PALETTE.bg, minHeight: 300 }}>
@@ -2312,7 +2430,7 @@ export default function LectioTracker() {
           </button>
           <div className="flex items-center gap-3 flex-wrap">
             <div className="flex rounded-full overflow-hidden" style={{ border: `1px solid ${PALETTE.wood}` }}>
-              {[{ v: "dashboard", l: t("Dashboard", "لوحة التحكم") }, { v: "books", l: t("Books", "الأسفار") }, { v: "agpeya", l: t("Agpeya", "الأجبية") }].map((tb) => (
+              {[{ v: "dashboard", l: t("Dashboard", "لوحة التحكم") }, { v: "books", l: t("Books", "الأسفار") }, { v: "agpeya", l: t("Agpeya", "الأجبية") }, { v: "leaderboard", l: t("Leaderboard", "لوحة الصدارة") }].map((tb) => (
                 <button key={tb.v} onClick={() => setActiveTab(tb.v)} className="lectio-pill px-4 py-2.5 text-sm" style={{ background: activeTab === tb.v ? PALETTE.gold : "transparent", color: activeTab === tb.v ? PALETTE.ink : PALETTE.muted, fontWeight: activeTab === tb.v ? 600 : 400 }}>
                   {tb.l}
                 </button>
@@ -2451,6 +2569,8 @@ export default function LectioTracker() {
         {activeTab === "books" && <BooksTab />}
 
         {activeTab === "agpeya" && <AgpeyaTab />}
+
+        {activeTab === "leaderboard" && <LeaderboardTab />}
 
         <div className="flex flex-col items-center gap-2 pt-6 pb-2">
           <div className="flex items-center gap-2">
