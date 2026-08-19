@@ -124,6 +124,23 @@ const USFM_CODE = {
 
 const APIBIBLE_KEY_STORAGE = "lectio-apibible-key";
 const APIBIBLE_ID_STORAGE = "lectio-apibible-nkjv-id";
+
+// The 7 canonical Agpeya (Coptic hours) prayers. Clock times are
+// intentionally left out — this is a same-day yes/no checklist, not a
+// scheduled-time tracker.
+const AGPEYA_PRAYERS = [
+  { id: "prime", name: "Prime", subtitle: "1st Hour" },
+  { id: "terce", name: "Terce", subtitle: "3rd Hour" },
+  { id: "sext", name: "Sext", subtitle: "6th Hour" },
+  { id: "none", name: "None", subtitle: "9th Hour" },
+  { id: "vespers", name: "Vespers", subtitle: "11th Hour" },
+  { id: "compline", name: "Compline", subtitle: "12th Hour" },
+  { id: "midnight", name: "Midnight", subtitle: "" },
+];
+const AGPEYA_PRAYERS_AR = {
+  prime: "باكر", terce: "الساعة الثالثة", sext: "الساعة السادسة", none: "الساعة التاسعة",
+  vespers: "الغروب", compline: "النوم", midnight: "نصف الليل",
+};
 const testamentOf = (key) => TESTAMENTS.find((t) => t.key === key);
 const todayStr = () => new Date().toISOString().slice(0, 10);
 const DAY_MS = 86400000;
@@ -185,7 +202,7 @@ const BOOK_VERSES = {
 const TOTAL_VERSES = Object.values(BOOK_VERSES).reduce((a, v) => a + v, 0);
 
 const STORAGE_KEY = "lectio-readings-v2";
-const DATA_VERSION = 3; // bump this whenever the saved-data shape changes, and add a case to migrateData()
+const DATA_VERSION = 4; // bump this whenever the saved-data shape changes, and add a case to migrateData()
 const PROFILE_COLORS = [PALETTE.gold, PALETTE.amber, PALETTE.burgundy, PALETTE.slate, "#4E7C59", "#6B4E8C"];
 
 // Upgrades older saved payloads to the current shape. Add a new "if (data.dataVersion < N)"
@@ -215,8 +232,9 @@ function migrateData(raw) {
   const profileData = data.profileData && typeof data.profileData === "object" ? { ...data.profileData } : {};
   // v2 -> v3: each profile also gets a `notes` map for remembered verses.
   profiles.forEach((p) => {
-    if (!profileData[p.id]) profileData[p.id] = { readings: {}, notes: {} };
+    if (!profileData[p.id]) profileData[p.id] = { readings: {}, notes: {}, agpeya: {} };
     if (!profileData[p.id].notes) profileData[p.id].notes = {};
+    if (!profileData[p.id].agpeya) profileData[p.id].agpeya = {};
   });
   return { dataVersion: DATA_VERSION, profiles, profileData };
 }
@@ -299,6 +317,7 @@ export default function LectioTracker() {
   const [activeProfileId, setActiveProfileId] = useState(null);
   const readings = (activeProfileId && profileData[activeProfileId] && profileData[activeProfileId].readings) || {};
   const notes = (activeProfileId && profileData[activeProfileId] && profileData[activeProfileId].notes) || {};
+  const agpeya = (activeProfileId && profileData[activeProfileId] && profileData[activeProfileId].agpeya) || {};
 
   const [loaded, setLoaded] = useState(false);
   const [activeTab, setActiveTab] = useState("books");
@@ -321,6 +340,7 @@ export default function LectioTracker() {
 
   const [apiKey, setApiKeyValue] = useState("");
   const [showKeySettings, setShowKeySettings] = useState(false);
+  const [certModal, setCertModal] = useState(null); // { type: "book", book: name } | { type: "canon" } | null
 
   useEffect(() => {
     const data = loadAppData();
@@ -347,7 +367,7 @@ export default function LectioTracker() {
     setProfiles((prev) => {
       const nextProfiles = [...prev, { id, name, color: PROFILE_COLORS[prev.length % PROFILE_COLORS.length] }];
       setProfileData((prevData) => {
-        const nextData = { ...prevData, [id]: { readings: {}, notes: {} } };
+        const nextData = { ...prevData, [id]: { readings: {}, notes: {}, agpeya: {} } };
         persist(nextProfiles, nextData);
         return nextData;
       });
@@ -419,7 +439,7 @@ export default function LectioTracker() {
   const updateReadings = (updater) => {
     if (!activeProfileId) return;
     setProfileData((prev) => {
-      const currentProfile = prev[activeProfileId] || { readings: {}, notes: {} };
+      const currentProfile = prev[activeProfileId] || { readings: {}, notes: {}, agpeya: {} };
       const nextReadings = updater(currentProfile.readings || {});
       const next = { ...prev, [activeProfileId]: { ...currentProfile, readings: nextReadings } };
       persist(profiles, next);
@@ -430,7 +450,7 @@ export default function LectioTracker() {
   const updateNotes = (updater) => {
     if (!activeProfileId) return;
     setProfileData((prev) => {
-      const currentProfile = prev[activeProfileId] || { readings: {}, notes: {} };
+      const currentProfile = prev[activeProfileId] || { readings: {}, notes: {}, agpeya: {} };
       const nextNotes = updater(currentProfile.notes || {});
       const next = { ...prev, [activeProfileId]: { ...currentProfile, notes: nextNotes } };
       persist(profiles, next);
@@ -448,6 +468,27 @@ export default function LectioTracker() {
     updateNotes((prev) => {
       const next = { ...prev };
       delete next[noteKeyFor(book, chapter, verse)];
+      return next;
+    });
+  };
+
+  const updateAgpeya = (updater) => {
+    if (!activeProfileId) return;
+    setProfileData((prev) => {
+      const currentProfile = prev[activeProfileId] || { readings: {}, notes: {}, agpeya: {} };
+      const nextAgpeya = updater(currentProfile.agpeya || {});
+      const next = { ...prev, [activeProfileId]: { ...currentProfile, agpeya: nextAgpeya } };
+      persist(profiles, next);
+      return next;
+    });
+  };
+
+  const togglePrayer = (dateStr, prayerId) => {
+    updateAgpeya((prev) => {
+      const dayRecord = { ...(prev[dateStr] || {}) };
+      if (dayRecord[prayerId]) delete dayRecord[prayerId]; else dayRecord[prayerId] = true;
+      const next = { ...prev };
+      if (Object.keys(dayRecord).length) next[dateStr] = dayRecord; else delete next[dateStr];
       return next;
     });
   };
@@ -722,6 +763,51 @@ export default function LectioTracker() {
     };
   }, [scopeEventDates]);
 
+  // --- Agpeya (daily prayer) stats ---
+  const agpeyaToday = agpeya[todayStr()] || {};
+  const agpeyaTodayCount = AGPEYA_PRAYERS.filter((p) => agpeyaToday[p.id]).length;
+
+  const agpeyaFullDates = useMemo(
+    () => Object.keys(agpeya).filter((d) => AGPEYA_PRAYERS.every((p) => agpeya[d] && agpeya[d][p.id])).sort(),
+    [agpeya]
+  );
+
+  const { agpeyaCurrentStreak, agpeyaLongestStreak } = useMemo(() => {
+    const dates = agpeyaFullDates;
+    if (!dates.length) return { agpeyaCurrentStreak: 0, agpeyaLongestStreak: 0 };
+    let best = 1, cur = 1;
+    for (let i = 1; i < dates.length; i++) {
+      const prev = new Date(dates[i - 1] + "T00:00:00");
+      const curD = new Date(dates[i] + "T00:00:00");
+      const diff = Math.round((curD - prev) / DAY_MS);
+      cur = diff === 1 ? cur + 1 : 1;
+      if (cur > best) best = cur;
+    }
+    const last = new Date(dates[dates.length - 1] + "T00:00:00");
+    const today = new Date(todayStr() + "T00:00:00");
+    const gap = Math.round((today - last) / DAY_MS);
+    return { agpeyaCurrentStreak: gap <= 1 ? cur : 0, agpeyaLongestStreak: best };
+  }, [agpeyaFullDates]);
+
+  // Last 7 days (oldest -> today) and last 30 days, each with a 0-7 prayer count — for the weekly strip and heatmap.
+  const agpeyaLastNDays = (n) => {
+    const out = [];
+    for (let i = n - 1; i >= 0; i--) {
+      const d = new Date(Date.now() - i * DAY_MS).toISOString().slice(0, 10);
+      const rec = agpeya[d] || {};
+      out.push({ date: d, count: AGPEYA_PRAYERS.filter((p) => rec[p.id]).length });
+    }
+    return out;
+  };
+  const agpeyaWeekly = useMemo(() => agpeyaLastNDays(7), [agpeya]);
+  const agpeyaHeatmap = useMemo(() => agpeyaLastNDays(30), [agpeya]);
+
+  const agpeyaPrayerTotals = useMemo(
+    () => AGPEYA_PRAYERS.map((p) => ({ ...p, total: Object.values(agpeya).filter((rec) => rec[p.id]).length })),
+    [agpeya]
+  );
+  const agpeyaTotalDaysTracked = Object.keys(agpeya).length;
+
   // How many chapters were read (for the first time) or books were finished,
   // bucketed by month or year — for the "Reading history" chart.
   const bookCompletionDate = useMemo(() => {
@@ -738,6 +824,31 @@ export default function LectioTracker() {
     });
     return map;
   }, [bookProgress, firstReadDate]);
+
+  // First-ever read date per book (the day you started it) — paired with
+  // bookCompletionDate above to give each completion certificate a date range.
+  const bookStartDate = useMemo(() => {
+    const map = {};
+    BOOKS.forEach((b) => {
+      let min = null;
+      for (let c = 1; c <= b.chapters; c++) {
+        const d = firstReadDate[keyFor(b.name, c)];
+        if (d && (!min || d < min)) min = d;
+      }
+      if (min) map[b.name] = min;
+    });
+    return map;
+  }, [firstReadDate]);
+
+  // Canon-wide start/finish, used only for the "Full Canon" certificate.
+  const canonRange = useMemo(() => {
+    const allDone = BOOKS.every((b) => (bookProgress[b.name] || 0) >= b.chapters);
+    if (!allDone) return null;
+    const starts = Object.values(bookStartDate);
+    const ends = Object.values(bookCompletionDate);
+    if (!starts.length || ends.length < BOOKS.length) return null;
+    return { start: starts.reduce((a, b) => (b < a ? b : a)), end: ends.reduce((a, b) => (b > a ? b : a)) };
+  }, [bookProgress, bookStartDate, bookCompletionDate]);
 
   const periodKey = (isoDate, granularity) => (granularity === "year" ? isoDate.slice(0, 4) : isoDate.slice(0, 7));
   const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -1063,8 +1174,16 @@ export default function LectioTracker() {
       <div className="flex gap-3 overflow-x-auto lectio-scroll pb-1">
         {milestones.map((m) => {
           const Icon = m.icon;
+          const isCanonMilestone = m.id === `bk-${TOTAL_BOOKS}`;
+          const clickable = isCanonMilestone && m.achieved;
           return (
-            <div key={m.id} title={m.date ? t(`Reached ${fmtDate(m.date)}`, `تحقق في ${fmtDate(m.date)}`) : undefined} className="flex flex-col items-center flex-shrink-0" style={{ width: 76 }}>
+            <div
+              key={m.id}
+              title={m.date ? t(`Reached ${fmtDate(m.date)}`, `تحقق في ${fmtDate(m.date)}`) : undefined}
+              onClick={clickable ? () => setCertModal({ type: "canon" }) : undefined}
+              className="flex flex-col items-center flex-shrink-0"
+              style={{ width: 76, cursor: clickable ? "pointer" : "default" }}
+            >
               <div
                 className="rounded-full flex items-center justify-center mb-1.5"
                 style={{
@@ -1172,8 +1291,17 @@ export default function LectioTracker() {
             {booksCompletedDetail.length ? (
               <div className="flex flex-wrap gap-1.5">
                 {booksCompletedDetail.map((b) => (
-                  <button key={b.name} onClick={() => { setActiveTab("books"); openBook(b); }} className="text-xs rounded-full px-3 py-1 flex items-center gap-1" style={{ background: PALETTE.gold, color: PALETTE.ink }}>
+                  <button key={b.name} onClick={() => { setActiveTab("books"); openBook(b); }} className="text-xs rounded-full pl-3 pr-1.5 py-1 flex items-center gap-1.5" style={{ background: PALETTE.gold, color: PALETTE.ink }}>
                     <CheckCircle2 size={11} /> {bookLabel(b.name)}
+                    <span
+                      role="button"
+                      onClick={(e) => { e.stopPropagation(); setCertModal({ type: "book", book: b.name }); }}
+                      title={t("View certificate", "عرض الشهادة")}
+                      className="rounded-full p-1 flex items-center justify-center"
+                      style={{ background: "rgba(42,33,24,0.15)" }}
+                    >
+                      <Award size={10} />
+                    </span>
                   </button>
                 ))}
               </div>
@@ -1665,11 +1793,126 @@ export default function LectioTracker() {
           <span className="text-sm flex items-center gap-2" style={{ color: PALETTE.muted }}>
             {read}/{book.chapters} {t("chapters read", "إصحاحًا مقروءًا")}
             {completions >= 2 && <RereadChip count={completions} />}
+            {read >= book.chapters && (
+              <button
+                onClick={() => setCertModal({ type: "book", book: book.name })}
+                className="flex items-center gap-1 text-xs rounded-full px-2.5 py-1"
+                style={{ background: `linear-gradient(135deg, ${PALETTE.gold}, #B98A22)`, color: PALETTE.ink }}
+              >
+                <Award size={12} /> {t("Certificate", "الشهادة")}
+              </button>
+            )}
           </span>
         </div>
         {selected && selected.book === book.name && <DetailPanel />}
         <Card>
           <ChapterGrid book={book} />
+        </Card>
+      </div>
+    );
+  };
+
+  const AgpeyaTab = () => {
+    const fmtDayLabel = (d) => new Date(d + "T00:00:00").toLocaleDateString(undefined, { weekday: "short" });
+    const heatColor = (count) => {
+      if (count === 0) return PALETTE.wood;
+      if (count < 4) return PALETTE.goldSoft;
+      if (count < 7) return PALETTE.amber;
+      return PALETTE.gold;
+    };
+
+    return (
+      <div className="space-y-5 lectio-fade-in">
+        <Card>
+          <div className="flex items-center justify-between mb-1">
+            <h3 className="lectio-display text-lg" style={{ color: PALETTE.parchment }}>{t("Today's Agpeya", "أجبية اليوم")}</h3>
+            <span className="text-xs" style={{ color: agpeyaTodayCount === 7 ? PALETTE.gold : PALETTE.muted }}>{agpeyaTodayCount}/7</span>
+          </div>
+          <p className="text-[11px] mb-3" style={{ color: PALETTE.muted }}>{t("Resets each new day — check off what you've prayed today.", "يُعاد الضبط كل يوم — علّم ما صليته اليوم.")}</p>
+          <div className="w-full h-1.5 rounded-full overflow-hidden mb-4" style={{ background: PALETTE.wood }}>
+            <div style={{ width: `${(agpeyaTodayCount / 7) * 100}%`, height: "100%", background: PALETTE.gold, transition: "width .3s ease" }} />
+          </div>
+          <div className="grid gap-2.5" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(150px, 1fr))" }}>
+            {AGPEYA_PRAYERS.map((p) => {
+              const done = !!agpeyaToday[p.id];
+              return (
+                <button
+                  key={p.id}
+                  onClick={() => togglePrayer(todayStr(), p.id)}
+                  className="lectio-tile rounded-xl p-3 text-left flex items-center gap-3"
+                  style={{ background: done ? `linear-gradient(150deg, ${PALETTE.gold}, #B98A22)` : PALETTE.bgSoft2, border: `1px solid ${done ? PALETTE.gold : PALETTE.wood}` }}
+                >
+                  <div
+                    className="rounded-full flex items-center justify-center flex-shrink-0"
+                    style={{ width: 26, height: 26, background: done ? PALETTE.ink : "transparent", border: `1.5px solid ${done ? PALETTE.ink : PALETTE.inkSoft}` }}
+                  >
+                    {done && <CheckCircle2 size={15} color={PALETTE.gold} />}
+                  </div>
+                  <div>
+                    <div className="text-sm font-semibold" style={{ color: done ? PALETTE.ink : PALETTE.parchment }}>{t(p.name, AGPEYA_PRAYERS_AR[p.id])}</div>
+                    {p.subtitle && <div className="text-[10px]" style={{ color: done ? "rgba(42,33,24,0.7)" : PALETTE.muted }}>{p.subtitle}</div>}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </Card>
+
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          <StatCard icon={<Flame size={16} color={PALETTE.gold} />} label={t("Current streak", "السلسلة الحالية")} value={t(`${agpeyaCurrentStreak}d`, `${agpeyaCurrentStreak} يومًا`)} />
+          <StatCard icon={<Flame size={16} color={PALETTE.goldSoft} />} label={t("Longest streak", "أطول سلسلة")} value={t(`${agpeyaLongestStreak}d`, `${agpeyaLongestStreak} يومًا`)} />
+          <StatCard icon={<CheckCircle2 size={16} color={PALETTE.gold} />} label={t("Full days", "أيام كاملة")} value={agpeyaFullDates.length} sub={t("all 7 prayed", "كل الصلوات السبع")} />
+          <StatCard icon={<Calendar size={16} color={PALETTE.gold} />} label={t("Days tracked", "أيام مسجّلة")} value={agpeyaTotalDaysTracked} />
+        </div>
+
+        <Card>
+          <h3 className="lectio-display text-lg mb-3" style={{ color: PALETTE.parchment }}>{t("This week", "هذا الأسبوع")}</h3>
+          <div className="flex justify-between gap-2">
+            {agpeyaWeekly.map((d) => (
+              <div key={d.date} className="flex flex-col items-center gap-1.5 flex-1">
+                <span className="text-[10px]" style={{ color: PALETTE.muted }}>{fmtDayLabel(d.date)}</span>
+                <div
+                  className="rounded-lg flex items-center justify-center w-full"
+                  style={{ height: 44, background: heatColor(d.count), color: d.count > 0 ? PALETTE.ink : PALETTE.inkSoft, fontSize: 12, fontWeight: 600 }}
+                  title={`${d.date}: ${d.count}/7`}
+                >
+                  {d.count}
+                </div>
+              </div>
+            ))}
+          </div>
+        </Card>
+
+        <Card>
+          <h3 className="lectio-display text-lg mb-3" style={{ color: PALETTE.parchment }}>{t("Last 30 days", "آخر 30 يومًا")}</h3>
+          <div className="flex flex-wrap gap-1.5">
+            {agpeyaHeatmap.map((d) => (
+              <div key={d.date} title={`${d.date}: ${d.count}/7`} className="rounded" style={{ width: 20, height: 20, background: heatColor(d.count) }} />
+            ))}
+          </div>
+          <div className="flex items-center gap-2 mt-3">
+            <span className="text-[10px]" style={{ color: PALETTE.muted }}>{t("Less", "أقل")}</span>
+            {[0, 2, 5, 7].map((c) => <div key={c} className="rounded" style={{ width: 12, height: 12, background: heatColor(c) }} />)}
+            <span className="text-[10px]" style={{ color: PALETTE.muted }}>{t("More", "أكثر")}</span>
+          </div>
+        </Card>
+
+        <Card>
+          <h3 className="lectio-display text-lg mb-3" style={{ color: PALETTE.parchment }}>{t("Per-prayer totals", "إجمالي كل صلاة")}</h3>
+          <div className="space-y-1.5">
+            {agpeyaPrayerTotals.map((p) => {
+              const pct = agpeyaTotalDaysTracked ? Math.round((p.total / agpeyaTotalDaysTracked) * 100) : 0;
+              return (
+                <div key={p.id} className="flex items-center gap-3">
+                  <span className="text-sm flex-shrink-0" style={{ color: PALETTE.parchment, width: 90 }}>{t(p.name, AGPEYA_PRAYERS_AR[p.id])}</span>
+                  <div className="flex-1 h-1.5 rounded-full overflow-hidden" style={{ background: PALETTE.wood }}>
+                    <div style={{ width: `${pct}%`, height: "100%", background: PALETTE.gold }} />
+                  </div>
+                  <span className="text-xs flex-shrink-0" style={{ color: PALETTE.muted, width: 34, textAlign: "right" }}>{p.total}</span>
+                </div>
+              );
+            })}
+          </div>
         </Card>
       </div>
     );
@@ -1773,6 +2016,116 @@ export default function LectioTracker() {
     );
   };
 
+  const CertificateModal = () => {
+    const canvasRef = React.useRef(null);
+    if (!certModal) return null;
+
+    const isCanon = certModal.type === "canon";
+    const bookName = !isCanon ? certModal.book : null;
+    const displayName = isCanon ? t("The Complete Canon", "الكتاب المقدس كاملاً") : bookLabel(bookName);
+    const startDate = isCanon ? (canonRange && canonRange.start) : bookStartDate[bookName];
+    const endDate = isCanon ? (canonRange && canonRange.end) : bookCompletionDate[bookName];
+    const completions = isCanon ? 1 : (bookCompletions[bookName] || 1);
+    const totalChapters = isCanon ? TOTAL_CHAPTERS : (BOOK_BY_NAME[bookName] ? BOOK_BY_NAME[bookName].chapters : 0);
+    const days = (startDate && endDate) ? Math.round((new Date(endDate + "T00:00:00") - new Date(startDate + "T00:00:00")) / DAY_MS) + 1 : null;
+    const profileName = activeProfile.name;
+
+    useEffect(() => {
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+      const ctx = canvas.getContext("2d");
+      const W = canvas.width, H = canvas.height;
+
+      const grad = ctx.createLinearGradient(0, 0, W, H);
+      grad.addColorStop(0, PALETTE.parchment);
+      grad.addColorStop(1, PALETTE.parchmentSoft);
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, W, H);
+
+      ctx.strokeStyle = PALETTE.gold;
+      ctx.lineWidth = 6;
+      ctx.strokeRect(24, 24, W - 48, H - 48);
+      ctx.strokeStyle = PALETTE.burgundy;
+      ctx.lineWidth = 1.5;
+      ctx.strokeRect(40, 40, W - 80, H - 80);
+
+      ctx.textAlign = "center";
+      ctx.fillStyle = PALETTE.burgundy;
+      ctx.font = "italic 22px 'Cormorant Garamond', serif";
+      ctx.fillText(t("CERTIFICATE OF COMPLETION", "شهادة إتمام").toUpperCase(), W / 2, 108);
+
+      ctx.fillStyle = PALETTE.ink;
+      ctx.font = "700 60px 'Cormorant Garamond', serif";
+      ctx.fillText(displayName, W / 2, 200);
+
+      ctx.font = (lang === "ar" ? "18px 'Cairo', sans-serif" : "18px 'Inter', sans-serif");
+      ctx.fillStyle = PALETTE.inkSoft;
+      ctx.fillText(t(`This certifies that ${profileName} has faithfully read`, `تشهد هذه الوثيقة بأن ${profileName} قد أتم قراءة`), W / 2, 250);
+      ctx.fillText(
+        isCanon ? t("the entire canon of Scripture, cover to cover.", "الكتاب المقدس بأكمله، من الغلاف إلى الغلاف.") : t(`the Book of ${displayName}, cover to cover.`, `سفر ${displayName} كاملاً.`),
+        W / 2, 278
+      );
+
+      const stats = [
+        { label: t("STARTED", "البداية"), value: startDate ? fmtDate(startDate) : "—" },
+        { label: t("FINISHED", "الانتهاء"), value: endDate ? fmtDate(endDate) : "—" },
+        { label: t("DAYS", "الأيام"), value: days != null ? String(days) : "—" },
+        { label: t("CHAPTERS", "الإصحاحات"), value: String(totalChapters) },
+      ];
+      if (completions > 1) stats.push({ label: t("TIMES READ", "عدد القراءات"), value: String(completions) });
+
+      const colW = (W - 200) / stats.length;
+      stats.forEach((s, i) => {
+        const cx = 100 + colW * i + colW / 2;
+        ctx.font = "600 12px 'Inter', sans-serif";
+        ctx.fillStyle = PALETTE.inkSoft;
+        ctx.fillText(s.label, cx, 350);
+        ctx.font = "600 26px 'Cormorant Garamond', serif";
+        ctx.fillStyle = PALETTE.ink;
+        ctx.fillText(s.value, cx, 384);
+      });
+
+      ctx.strokeStyle = PALETTE.goldSoft;
+      ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(140, 420); ctx.lineTo(W - 140, 420); ctx.stroke();
+
+      ctx.font = "italic 17px 'Cormorant Garamond', serif";
+      ctx.fillStyle = PALETTE.burgundy;
+      ctx.fillText("Ἰησοῦς Χριστός, Υἱὸς Θεοῦ, Σωτήρ", W / 2, 460);
+
+      ctx.font = "13px 'Cormorant Garamond', serif";
+      ctx.fillStyle = PALETTE.inkSoft;
+      ctx.fillText("Lectio", W / 2, 488);
+    }, [certModal, profileName, startDate, endDate, days, completions, displayName, lang]);
+
+    const download = () => {
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+      const a = document.createElement("a");
+      a.href = canvas.toDataURL("image/png");
+      a.download = `${(isCanon ? "full-canon" : bookName).toLowerCase().replace(/\s+/g, "-")}-certificate.png`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+    };
+
+    return (
+      <div className="fixed inset-0 flex items-center justify-center p-4 z-50" style={{ background: "rgba(0,0,0,0.72)" }} onClick={() => setCertModal(null)}>
+        <div className="max-w-2xl w-full" onClick={(e) => e.stopPropagation()}>
+          <canvas ref={canvasRef} width={1000} height={520} className="w-full h-auto rounded-lg" style={{ boxShadow: "0 20px 60px rgba(0,0,0,0.5)" }} />
+          <div className="flex justify-center gap-3 mt-4">
+            <button onClick={download} className="text-sm rounded-full px-5 py-2 flex items-center gap-2" style={{ background: PALETTE.gold, color: PALETTE.ink }}>
+              <Download size={14} /> {t("Download", "تحميل")}
+            </button>
+            <button onClick={() => setCertModal(null)} className="text-sm rounded-full px-5 py-2" style={{ background: "transparent", border: `1px solid ${PALETTE.parchment}`, color: PALETTE.parchment }}>
+              {t("Close", "إغلاق")}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   if (!loaded) {
     return (
       <div className="lectio-root flex items-center justify-center p-10" style={{ background: PALETTE.bg, minHeight: 300 }}>
@@ -1805,7 +2158,7 @@ export default function LectioTracker() {
           </button>
           <div className="flex items-center gap-3 flex-wrap">
             <div className="flex rounded-full overflow-hidden" style={{ border: `1px solid ${PALETTE.wood}` }}>
-              {[{ v: "dashboard", l: t("Dashboard", "لوحة التحكم") }, { v: "books", l: t("Books", "الأسفار") }].map((tb) => (
+              {[{ v: "dashboard", l: t("Dashboard", "لوحة التحكم") }, { v: "books", l: t("Books", "الأسفار") }, { v: "agpeya", l: t("Agpeya", "الأجبية") }].map((tb) => (
                 <button key={tb.v} onClick={() => setActiveTab(tb.v)} className="lectio-pill px-4 py-1.5 text-sm" style={{ background: activeTab === tb.v ? PALETTE.gold : "transparent", color: activeTab === tb.v ? PALETTE.ink : PALETTE.muted, fontWeight: activeTab === tb.v ? 600 : 400 }}>
                   {tb.l}
                 </button>
@@ -1943,6 +2296,8 @@ export default function LectioTracker() {
 
         {activeTab === "books" && <BooksTab />}
 
+        {activeTab === "agpeya" && <AgpeyaTab />}
+
         <div className="flex flex-col items-center gap-2 pt-6 pb-2">
           <div className="flex items-center gap-2">
             <button
@@ -2002,6 +2357,8 @@ export default function LectioTracker() {
             </div>
           </div>
         )}
+
+        <CertificateModal />
       </div>
     </div>
   );
