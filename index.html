@@ -284,17 +284,37 @@ const SUPABASE_URL = "https://umrfejcsnjhyswnyhzon.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_gPmimJf6K8OF2ZlTCBsu_g_uT76mKYJ";
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
+// Postgres's jsonb type does NOT preserve object key order the way JS does —
+// so a value round-tripped through the database can come back with its keys
+// in a different order than the local copy, even when nothing actually
+// changed. A plain JSON.stringify() comparison would treat that as "changed"
+// and needlessly re-render. This sorts object keys (not array order, which
+// is semantically real) recursively so equal data always produces an equal
+// signature regardless of storage-layer key ordering.
+function stableStringify(value) {
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(",")}]`;
+  if (value && typeof value === "object") {
+    const keys = Object.keys(value).sort();
+    return `{${keys.map((k) => `${JSON.stringify(k)}:${stableStringify(value[k])}`).join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
 async function fetchCloudData() {
   const { data: profileRows, error: pErr } = await supabase.from("profiles").select("*").order("created_at", { ascending: true });
   if (pErr) throw pErr;
   const { data: dataRows, error: dErr } = await supabase.from("profile_data").select("*");
   if (dErr) throw dErr;
   const profiles = (profileRows || []).map((r) => ({ id: r.id, name: r.name, color: r.color }));
-  const profileData = {};
+  const dataByProfileId = {};
   (dataRows || []).forEach((r) => {
-    profileData[r.profile_id] = { readings: r.readings || {}, notes: r.notes || {}, agpeya: r.agpeya || {} };
+    dataByProfileId[r.profile_id] = { readings: r.readings || {}, notes: r.notes || {}, agpeya: r.agpeya || {} };
   });
-  profiles.forEach((p) => { if (!profileData[p.id]) profileData[p.id] = { readings: {}, notes: {}, agpeya: {} }; });
+  // Build profileData by walking `profiles` (a stable, ordered list) rather
+  // than the unordered profile_data query results, so key order stays
+  // deterministic between fetches too.
+  const profileData = {};
+  profiles.forEach((p) => { profileData[p.id] = dataByProfileId[p.id] || { readings: {}, notes: {}, agpeya: {} }; });
   return { profiles, profileData };
 }
 
@@ -415,20 +435,18 @@ export default function LectioTracker() {
       let status = "offline";
       try {
         const cloud = await fetchCloudData();
-        if (cloud.profiles.length === 0 && local.profiles.length > 0) {
+        if (cloud.profiles.length > 0) {
+          // The cloud already has real data — that's the shared source of truth.
+          finalProfiles = cloud.profiles;
+          finalProfileData = cloud.profileData;
+        } else if (local.profiles.length > 0) {
+          // Cloud is empty but this device has local history — offer to seed
+          // the cloud with it. Either way, keep showing the local data —
+          // declining the prompt must never blank out real progress.
           const shouldMigrate = window.confirm(
             "We found existing progress on this device that isn't in the cloud yet. Upload it now so it syncs across your family's devices?"
           );
-          if (shouldMigrate) {
-            await pushCloudData(local.profiles, local.profileData);
-            // finalProfiles/finalProfileData already point at local — leave as is.
-          } else {
-            finalProfiles = cloud.profiles;
-            finalProfileData = cloud.profileData;
-          }
-        } else {
-          finalProfiles = cloud.profiles;
-          finalProfileData = cloud.profileData;
+          if (shouldMigrate) await pushCloudData(local.profiles, local.profileData);
         }
         status = "online";
       } catch (e) {
@@ -437,7 +455,12 @@ export default function LectioTracker() {
       if (cancelled) return;
       setProfiles(finalProfiles);
       setProfileData(finalProfileData);
-      saveAppData(finalProfiles, finalProfileData); // refresh the local fallback cache either way
+      lastAppliedSigRef.current = stableStringify({ profiles: finalProfiles, profileData: finalProfileData });
+      // Only refresh the local fallback cache when we're not at risk of
+      // blanking out real history with an empty/failed result.
+      if (finalProfiles.length > 0 || local.profiles.length === 0) {
+        saveAppData(finalProfiles, finalProfileData);
+      }
       setCloudStatus(status);
       setActiveProfileId(null); // always land on the profile picker on a fresh load
       setApiKeyValue(getApiBibleKey());
@@ -446,24 +469,42 @@ export default function LectioTracker() {
     return () => { cancelled = true; };
   }, []);
 
-  // Live sync: when another device changes profiles or their data, pull the
-  // latest and update our own view — this is what makes it feel "seamless"
-  // across devices rather than needing a manual refresh.
+  // Live sync: when ANOTHER device changes profiles or their data, pull the
+  // latest and update our own view. Writes made by THIS device already update
+  // the screen instantly (see persist() below), so a realtime notification is
+  // only worth acting on when it actually carries different data than what
+  // we already have — lastAppliedSigRef holds a signature of the data we
+  // currently believe is true (updated on every local write too), so an
+  // echo of our own write — even a slow one — is recognized as "nothing new"
+  // and never triggers a re-render, instead of relying on timing alone.
+  const lastLocalWriteRef = React.useRef(0);
+  const realtimeDebounceRef = React.useRef(null);
+  const lastAppliedSigRef = React.useRef("");
+
   useEffect(() => {
+    const handleRemoteChange = () => {
+      if (Date.now() - lastLocalWriteRef.current < 1500) return; // near-certain echo — skip the network round trip entirely
+      if (realtimeDebounceRef.current) clearTimeout(realtimeDebounceRef.current);
+      realtimeDebounceRef.current = setTimeout(() => {
+        fetchCloudData()
+          .then((cloud) => {
+            const sig = stableStringify({ profiles: cloud.profiles, profileData: cloud.profileData });
+            setCloudStatus("online");
+            if (sig === lastAppliedSigRef.current) return; // identical to what we already have — no re-render
+            lastAppliedSigRef.current = sig;
+            setProfiles(cloud.profiles);
+            setProfileData(cloud.profileData);
+            saveAppData(cloud.profiles, cloud.profileData);
+          })
+          .catch(() => setCloudStatus("offline"));
+      }, 400); // coalesce a burst of changes (e.g. someone ticking several chapters) into one refetch
+    };
     const channel = supabase
       .channel("lectio-sync")
-      .on("postgres_changes", { event: "*", schema: "public", table: "profiles" }, () => {
-        fetchCloudData()
-          .then((cloud) => { setProfiles(cloud.profiles); setProfileData(cloud.profileData); saveAppData(cloud.profiles, cloud.profileData); setCloudStatus("online"); })
-          .catch(() => setCloudStatus("offline"));
-      })
-      .on("postgres_changes", { event: "*", schema: "public", table: "profile_data" }, () => {
-        fetchCloudData()
-          .then((cloud) => { setProfiles(cloud.profiles); setProfileData(cloud.profileData); saveAppData(cloud.profiles, cloud.profileData); setCloudStatus("online"); })
-          .catch(() => setCloudStatus("offline"));
-      })
+      .on("postgres_changes", { event: "*", schema: "public", table: "profiles" }, handleRemoteChange)
+      .on("postgres_changes", { event: "*", schema: "public", table: "profile_data" }, handleRemoteChange)
       .subscribe();
-    return () => { supabase.removeChannel(channel); };
+    return () => { supabase.removeChannel(channel); if (realtimeDebounceRef.current) clearTimeout(realtimeDebounceRef.current); };
   }, []);
 
   const saveApiKey = (key) => {
@@ -472,6 +513,8 @@ export default function LectioTracker() {
   };
 
   const persist = useCallback((nextProfiles, nextProfileData) => {
+    lastLocalWriteRef.current = Date.now();
+    lastAppliedSigRef.current = stableStringify({ profiles: nextProfiles, profileData: nextProfileData });
     setSaveState("saving");
     const localOk = saveAppData(nextProfiles, nextProfileData);
     pushCloudData(nextProfiles, nextProfileData)
