@@ -2440,11 +2440,9 @@ export default function LectioTracker() {
           <div className="flex items-center gap-3 flex-wrap">
             <div className="flex rounded-full overflow-hidden" style={{ border: `1px solid ${PALETTE.wood}` }}>
               {NAV_TABS.map((tb) => {
-                const Icon = tb.icon;
                 const isActive = activeTab === tb.v;
                 return (
-                  <button key={tb.v} onClick={() => setActiveTab(tb.v)} className="lectio-pill flex items-center gap-1.5 px-4 py-2.5 text-sm" style={{ background: isActive ? PALETTE.gold : "transparent", color: isActive ? PALETTE.ink : PALETTE.muted, fontWeight: isActive ? 600 : 400 }}>
-                    <Icon size={15} color={isActive ? PALETTE.ink : PALETTE.muted} />
+                  <button key={tb.v} onClick={() => setActiveTab(tb.v)} className="lectio-pill px-4 py-2.5 text-sm" style={{ background: isActive ? PALETTE.gold : "transparent", color: isActive ? PALETTE.ink : PALETTE.muted, fontWeight: isActive ? 600 : 400 }}>
                     {tb.l}
                   </button>
                 );
