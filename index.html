@@ -530,6 +530,8 @@ export default function LectioTracker() {
   const [kidBook, setKidBook] = useState(null);
   const [kidTestFilter, setKidTestFilter] = useState("all");
   const [justMarked, setJustMarked] = useState(null);
+  const [kidBookComplete, setKidBookComplete] = useState(null); // book name, while the "you finished it!" celebration is showing
+  const [addingColor, setAddingColor] = useState(PROFILE_COLORS[0]);
   // These must be declared unconditionally, before any early return below —
   // declaring them later (after the !loaded / !activeProfileId checks) meant
   // they were only called on SOME renders, which is exactly what caused the
@@ -646,10 +648,10 @@ export default function LectioTracker() {
       .catch(() => { setSaveState(localOk ? "idle" : "error"); setCloudStatus("offline"); });
   }, []);
 
-  const addProfile = (name, isKid) => {
+  const addProfile = (name, isKid, color) => {
     const id = makeId();
     setProfiles((prev) => {
-      const nextProfiles = [...prev, { id, name, color: PROFILE_COLORS[prev.length % PROFILE_COLORS.length], isKid: !!isKid }];
+      const nextProfiles = [...prev, { id, name, color: color || PROFILE_COLORS[prev.length % PROFILE_COLORS.length], isKid: !!isKid }];
       setProfileData((prevData) => {
         const nextData = { ...prevData, [id]: { readings: {}, notes: {}, agpeya: {} } };
         persist(nextProfiles, nextData);
@@ -2287,9 +2289,10 @@ export default function LectioTracker() {
     const submitNewProfile = () => {
       const name = (addingName || "").trim();
       if (!name) { setAddingName(null); setAddingIsKid(false); return; }
-      addProfile(name, addingIsKid);
+      addProfile(name, addingIsKid, addingColor);
       setAddingName(null);
       setAddingIsKid(false);
+      setAddingColor(PROFILE_COLORS[0]);
     };
 
     return (
@@ -2351,8 +2354,18 @@ export default function LectioTracker() {
             <div className="flex flex-col items-center gap-2" style={{ width: 110 }}>
               {addingName !== null ? (
                 <div className="flex flex-col items-center gap-2 w-full">
-                  <div className="rounded-2xl flex items-center justify-center" style={{ width: 96, height: 96, border: `2px dashed ${PALETTE.goldSoft}` }}>
-                    <BookMarked size={28} color={PALETTE.goldSoft} />
+                  <div className="rounded-2xl flex items-center justify-center" style={{ width: 96, height: 96, background: `linear-gradient(150deg, ${addingColor}, ${PALETTE.bgSoft2})`, border: `2px solid ${PALETTE.goldSoft}` }}>
+                    <span className="lectio-display text-3xl" style={{ color: PALETTE.parchment }}>{(addingName || "").trim().charAt(0).toUpperCase() || <BookMarked size={28} color={PALETTE.parchment} />}</span>
+                  </div>
+                  <div className="flex items-center gap-1.5 justify-center flex-wrap">
+                    {PROFILE_COLORS.map((c) => (
+                      <button
+                        key={c}
+                        onClick={() => setAddingColor(c)}
+                        className="rounded-full flex-shrink-0"
+                        style={{ width: 20, height: 20, background: c, border: addingColor === c ? `2px solid ${PALETTE.parchment}` : "2px solid transparent", boxShadow: addingColor === c ? `0 0 0 1px ${PALETTE.gold}` : "none" }}
+                      />
+                    ))}
                   </div>
                   <input
                     autoFocus
@@ -2551,13 +2564,34 @@ export default function LectioTracker() {
     const weeklySorted = (key) => [...weeklyLeaderboardStats].sort((a, b) => b.stats[key] - a.stats[key]);
     const KP = KID_PALETTE;
 
+    const otBooksK = BOOKS.filter((b) => b.testament === "ot");
+    const ntBooksK = BOOKS.filter((b) => b.testament === "nt");
+    const otTotalK = otBooksK.reduce((s, b) => s + b.chapters, 0);
+    const otReadK = otBooksK.reduce((s, b) => s + (bookProgress[b.name] || 0), 0);
+    const ntTotalK = ntBooksK.reduce((s, b) => s + b.chapters, 0);
+    const ntReadK = ntBooksK.reduce((s, b) => s + (bookProgress[b.name] || 0), 0);
+    const canonPctK = TOTAL_CHAPTERS ? Math.round((chapterKeys.length / TOTAL_CHAPTERS) * 100) : 0;
+    const otPctK = otTotalK ? Math.round((otReadK / otTotalK) * 100) : 0;
+    const ntPctK = ntTotalK ? Math.round((ntReadK / ntTotalK) * 100) : 0;
+
+    const nextUnreadChapterNum = (bookName) => {
+      const b = BOOK_BY_NAME[bookName];
+      for (let c = 1; c <= b.chapters; c++) {
+        if (!(readings[keyFor(bookName, c)] || []).length) return c;
+      }
+      return null;
+    };
+
     const kidTapChapter = (book, chapter) => {
       const entries = readings[keyFor(book, chapter)] || [];
       if (entries.length === 0) {
+        const bookObj = BOOK_BY_NAME[book];
+        const willComplete = (bookProgress[book] || 0) + 1 >= bookObj.chapters;
         addReading(book, chapter, todayStr());
         const k = keyFor(book, chapter);
         setJustMarked(k);
         setTimeout(() => setJustMarked((cur) => (cur === k ? null : cur)), 500);
+        if (willComplete) setKidBookComplete(book);
       } else {
         setSelected({ book, chapter });
       }
@@ -2577,7 +2611,15 @@ export default function LectioTracker() {
             <button onClick={() => setSelected(null)} className="rounded-full p-2" style={{ color: KP.inkSoft, background: KP.cardSoft }}><X size={18} /></button>
           </div>
           <button
-            onClick={() => { if (isRead) { clearAllEntries(book, chapter); } else { addReading(book, chapter, todayStr()); } }}
+            onClick={() => {
+              if (isRead) {
+                clearAllEntries(book, chapter);
+              } else {
+                const willComplete = (bookProgress[book] || 0) + 1 >= BOOK_BY_NAME[book].chapters;
+                addReading(book, chapter, todayStr());
+                if (willComplete) setKidBookComplete(book);
+              }
+            }}
             className="w-full flex items-center justify-center gap-2 text-lg font-bold rounded-2xl py-4 mb-4"
             style={{
               background: isRead ? `linear-gradient(135deg, ${KP.teal}, ${KP.tealDeep})` : KP.cardSoft,
@@ -2650,6 +2692,66 @@ export default function LectioTracker() {
                 </div>
               </div>
 
+              <div className="rounded-3xl p-5 lectio-kid-card" style={{ background: KP.card }}>
+                <h3 className="lectio-kid-display text-xl font-bold mb-4" style={{ color: KP.ink }}>{t("Your Bible journey", "رحلتك في الكتاب المقدس")}</h3>
+                <div className="grid grid-cols-3 gap-3">
+                  <div className="text-center">
+                    <div className="relative mx-auto mb-2" style={{ width: 66, height: 66 }}>
+                      <svg width="66" height="66" style={{ transform: "rotate(-90deg)" }}>
+                        <circle cx="33" cy="33" r="27" fill="none" stroke={KP.cardSoft} strokeWidth="7" />
+                        <circle cx="33" cy="33" r="27" fill="none" stroke={KP.teal} strokeWidth="7" strokeDasharray={2 * Math.PI * 27} strokeDashoffset={2 * Math.PI * 27 * (1 - canonPctK / 100)} strokeLinecap="round" />
+                      </svg>
+                      <div className="absolute inset-0 flex items-center justify-center text-sm font-extrabold" style={{ color: KP.ink }}>{canonPctK}%</div>
+                    </div>
+                    <div className="text-[11px] font-semibold" style={{ color: KP.inkSoft }}>{t("Whole Bible", "الكتاب المقدس")}</div>
+                  </div>
+                  <div className="text-center">
+                    <div className="relative mx-auto mb-2" style={{ width: 66, height: 66 }}>
+                      <svg width="66" height="66" style={{ transform: "rotate(-90deg)" }}>
+                        <circle cx="33" cy="33" r="27" fill="none" stroke={KP.cardSoft} strokeWidth="7" />
+                        <circle cx="33" cy="33" r="27" fill="none" stroke={KP.coral} strokeWidth="7" strokeDasharray={2 * Math.PI * 27} strokeDashoffset={2 * Math.PI * 27 * (1 - otPctK / 100)} strokeLinecap="round" />
+                      </svg>
+                      <div className="absolute inset-0 flex items-center justify-center text-sm font-extrabold" style={{ color: KP.ink }}>{otPctK}%</div>
+                    </div>
+                    <div className="text-[11px] font-semibold" style={{ color: KP.inkSoft }}>{t("Old Testament", "العهد القديم")}</div>
+                  </div>
+                  <div className="text-center">
+                    <div className="relative mx-auto mb-2" style={{ width: 66, height: 66 }}>
+                      <svg width="66" height="66" style={{ transform: "rotate(-90deg)" }}>
+                        <circle cx="33" cy="33" r="27" fill="none" stroke={KP.cardSoft} strokeWidth="7" />
+                        <circle cx="33" cy="33" r="27" fill="none" stroke={KP.purple} strokeWidth="7" strokeDasharray={2 * Math.PI * 27} strokeDashoffset={2 * Math.PI * 27 * (1 - ntPctK / 100)} strokeLinecap="round" />
+                      </svg>
+                      <div className="absolute inset-0 flex items-center justify-center text-sm font-extrabold" style={{ color: KP.ink }}>{ntPctK}%</div>
+                    </div>
+                    <div className="text-[11px] font-semibold" style={{ color: KP.inkSoft }}>{t("New Testament", "العهد الجديد")}</div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="rounded-3xl p-5 lectio-kid-card" style={{ background: KP.card }}>
+                <h3 className="lectio-kid-display text-xl font-bold mb-3" style={{ color: KP.ink }}>{t("My badges", "أوسمتي")}</h3>
+                <div className="flex gap-3 overflow-x-auto lectio-scroll pb-1">
+                  {milestones.map((m) => {
+                    const Icon = m.icon;
+                    return (
+                      <div key={m.id} title={m.date ? t(`Reached ${fmtDate(m.date)}`, `تحقق في ${fmtDate(m.date)}`) : undefined} className="flex flex-col items-center flex-shrink-0" style={{ width: 72 }}>
+                        <div
+                          className="rounded-full flex items-center justify-center mb-1.5"
+                          style={{
+                            width: 52, height: 52,
+                            background: m.achieved ? `linear-gradient(135deg, ${KP.yellow}, ${KP.yellowDeep})` : KP.cardSoft,
+                            border: `2px solid ${m.achieved ? KP.yellowDeep : KP.line}`,
+                          }}
+                        >
+                          {m.achieved ? <Icon size={22} color="#fff" /> : <Lock size={17} color={KP.inkSoft} />}
+                        </div>
+                        <span className="text-[10px] text-center font-semibold leading-tight" style={{ color: m.achieved ? KP.ink : KP.inkSoft }}>{m.label}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
               {currentlyReadingBooks.length > 0 && (
                 <div>
                   <h3 className="lectio-kid-display text-2xl font-bold mb-3" style={{ color: KP.ink }}>{t("Keep reading", "تابع القراءة")}</h3>
@@ -2659,7 +2761,7 @@ export default function LectioTracker() {
                       return (
                         <button
                           key={b.name}
-                          onClick={() => { setKidBook(b); setKidView("book"); setSelected(null); }}
+                          onClick={() => { setKidBook(b); setKidView("book"); const nextCh = nextUnreadChapterNum(b.name); setSelected(nextCh ? { book: b.name, chapter: nextCh } : null); }}
                           className="lectio-kid-tile rounded-2xl p-4 text-left lectio-kid-card"
                           style={{ background: KP.card, border: `2px solid ${KP.orange}` }}
                         >
@@ -2825,6 +2927,30 @@ export default function LectioTracker() {
             </div>
           )}
         </div>
+
+        {kidBookComplete && (
+          <div className="fixed inset-0 flex items-center justify-center p-6 z-50" style={{ background: "rgba(58,46,31,0.55)" }}>
+            <div className="rounded-3xl p-6 text-center lectio-kid-pop" style={{ background: KP.card, maxWidth: 340 }}>
+              <div className="rounded-full flex items-center justify-center mx-auto mb-4" style={{ width: 72, height: 72, background: `linear-gradient(135deg, ${KP.yellow}, ${KP.yellowDeep})` }}>
+                <Award size={36} color="#fff" />
+              </div>
+              <h3 className="lectio-kid-display text-2xl font-extrabold mb-1" style={{ color: KP.ink }}>{t("You finished it!", "أنهيته!")}</h3>
+              <p className="text-sm mb-5" style={{ color: KP.inkSoft }}>{t(`You read the whole book of ${bookLabel(kidBookComplete)}!`, `قرأت سفر ${bookLabel(kidBookComplete)} كاملاً!`)}</p>
+              <button
+                onClick={() => { setCertModal({ type: "book", book: kidBookComplete }); setKidBookComplete(null); }}
+                className="w-full rounded-2xl py-3 text-base font-bold mb-2"
+                style={{ background: `linear-gradient(135deg, ${KP.teal}, ${KP.tealDeep})`, color: "#fff" }}
+              >
+                {t("See my certificate", "شاهد شهادتي")}
+              </button>
+              <button onClick={() => setKidBookComplete(null)} className="w-full rounded-2xl py-3 text-base font-semibold" style={{ background: KP.cardSoft, color: KP.inkSoft }}>
+                {t("Keep going", "تابع")}
+              </button>
+            </div>
+          </div>
+        )}
+
+        <CertificateModal />
       </div>
     );
   };
