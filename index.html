@@ -482,6 +482,21 @@ function StableSlot({ slotRef }) {
   return slotRef.current ? slotRef.current() : null;
 }
 
+// The general-purpose version of the same fix: wraps a component defined
+// inside another component's body (which is nearly every "sub-component" in
+// this file — Card, StatCard, BooksTab, VerseNotes, etc.) so React sees a
+// permanently stable component identity across renders instead of a brand
+// new one every time. Without this, React tears down and rebuilds each of
+// these on every single render — any tap, any background sync — which is
+// what caused the flashing throughout the app. The returned component is a
+// drop-in replacement: same props in, same JSX out, nothing else changes.
+function useStableComponent(renderFn) {
+  const renderRef = React.useRef(renderFn);
+  renderRef.current = renderFn;
+  const stableRef = React.useRef((props) => renderRef.current(props));
+  return stableRef.current;
+}
+
 export default function LectioTracker() {
   // profileData: { [profileId]: { readings: { "Book::Chapter": [{id,date}], ... } } }
   const [profiles, setProfiles] = useState([]);
@@ -1177,7 +1192,7 @@ export default function LectioTracker() {
     return map;
   }, [bookCompletionDate, scopeBooks, historyGranularity]);
 
-  const HistoryTooltip = ({ active, payload }) => {
+  const HistoryTooltip = useStableComponent(({ active, payload }) => {
     if (!active || !payload || !payload.length) return null;
     const period = payload[0].payload.period;
     if (historyMetric === "books") {
@@ -1193,7 +1208,7 @@ export default function LectioTracker() {
         <div style={{ color: PALETTE.ink }}>{t(`${payload[0].value} chapter${payload[0].value === 1 ? "" : "s"} read`, `${payload[0].value} إصحاحًا مقروءًا`)}</div>
       </div>
     );
-  };
+  });
 
   const recent = useMemo(() => {
     const scopeNames = new Set(scopeBooks.map((b) => b.name));
@@ -1296,7 +1311,7 @@ export default function LectioTracker() {
     `}</style>
   );
 
-  const Ring = ({ pct, size = 108 }) => {
+  const Ring = useStableComponent(({ pct, size = 108 }) => {
     const stroke = 9;
     const r = (size - stroke) / 2;
     const c = 2 * Math.PI * r;
@@ -1318,9 +1333,9 @@ export default function LectioTracker() {
         />
       </svg>
     );
-  };
+  });
 
-  const PillGroup = ({ value, onChange, options }) => (
+  const PillGroup = useStableComponent(({ value, onChange, options }) => (
     <div className="flex rounded-full overflow-hidden" style={{ border: `1px solid ${PALETTE.wood}` }}>
       {options.map((o) => (
         <button
@@ -1333,15 +1348,15 @@ export default function LectioTracker() {
         </button>
       ))}
     </div>
-  );
+  ));
 
-  const Card = ({ children, style, className = "" }) => (
+  const Card = useStableComponent(({ children, style, className = "" }) => (
     <div className={`lectio-card rounded-2xl p-5 ${className}`} style={{ background: `linear-gradient(160deg, ${PALETTE.bgSoft2}, ${PALETTE.bgSoft})`, border: `1px solid ${PALETTE.wood}`, ...style }}>
       {children}
     </div>
-  );
+  ));
 
-  const StatCard = ({ icon, label, value, sub, onClick, active }) => (
+  const StatCard = useStableComponent(({ icon, label, value, sub, onClick, active }) => (
     <div
       onClick={onClick}
       className="lectio-card rounded-xl p-4 flex items-center gap-3"
@@ -1359,10 +1374,10 @@ export default function LectioTracker() {
         {sub && <div className="text-[11px] mt-0.5" style={{ color: PALETTE.gold }}>{sub}</div>}
       </div>
     </div>
-  );
+  ));
 
   // Amber "×N" chip — the one consistent visual signal for "read more than once"
-  const RereadChip = ({ count, size = "sm" }) => {
+  const RereadChip = useStableComponent(({ count, size = "sm" }) => {
     if (!count || count <= 1) return null;
     const big = size === "lg";
     return (
@@ -1378,9 +1393,9 @@ export default function LectioTracker() {
         <Repeat size={big ? 12 : 9} /> {count}×
       </span>
     );
-  };
+  });
 
-  const Shelf = () => {
+  const Shelf = useStableComponent(() => {
     const shownTestaments = filterTestament === "all" ? TESTAMENTS : TESTAMENTS.filter((t) => t.key === filterTestament);
     return (
       <Card>
@@ -1449,9 +1464,9 @@ export default function LectioTracker() {
         </div>
       </Card>
     );
-  };
+  });
 
-  const MilestoneStrip = () => (
+  const MilestoneStrip = useStableComponent(() => (
     <Card>
       <div className="flex items-center gap-2 mb-1">
         <Award size={16} color={PALETTE.gold} />
@@ -1492,9 +1507,9 @@ export default function LectioTracker() {
         })}
       </div>
     </Card>
-  );
+  ));
 
-  const PaceCard = () => (
+  const PaceCard = useStableComponent(() => (
     <Card>
       <div className="flex items-center gap-2 mb-3">
         <TrendingUp size={16} color={PALETTE.gold} />
@@ -1524,9 +1539,9 @@ export default function LectioTracker() {
         </div>
       )}
     </Card>
-  );
+  ));
 
-  const RereadCard = () => {
+  const RereadCard = useStableComponent(() => {
     if (!topRereadBooks.length) return null;
     return (
       <Card>
@@ -1545,10 +1560,10 @@ export default function LectioTracker() {
         </div>
       </Card>
     );
-  };
+  });
 
   // Chapter status: Not Read / Read / Read Again, plus a clear reading log
-  const StatDetailPanel = () => {
+  const StatDetailPanel = useStableComponent(() => {
     if (!expandedStat) return null;
     let title = "", body = null;
 
@@ -1698,7 +1713,7 @@ export default function LectioTracker() {
         {body}
       </div>
     );
-  };
+  });
 
   // Same fix as KidApp/KidChapterPanel — DetailPanel was being torn down and
   // rebuilt on every render (any tap, any sync event), which is what caused
@@ -1792,7 +1807,7 @@ export default function LectioTracker() {
   // Verse-remembering picker: shows a 1..N dropdown of verse numbers with no
   // text until one is chosen (step 1: references only), fetches that verse's
   // NKJV text on selection (step 2), and lets it be trimmed before saving.
-  const VerseNotes = ({ book, chapter }) => {
+  const VerseNotes = useStableComponent(({ book, chapter }) => {
     const usfm = USFM_CODE[book];
     const savedForChapter = Object.entries(notes).filter(([k]) => k.startsWith(`${book}::${chapter}::`));
 
@@ -1918,9 +1933,9 @@ export default function LectioTracker() {
         )}
       </div>
     );
-  };
+  });
 
-  const ChapterGrid = ({ book }) => {
+  const ChapterGrid = useStableComponent(({ book }) => {
     const cells = Array.from({ length: book.chapters }, (_, i) => i + 1);
     const tst = testamentOf(book.testament);
     return (
@@ -1965,9 +1980,9 @@ export default function LectioTracker() {
         })}
       </div>
     );
-  };
+  });
 
-  const BooksTab = () => {
+  const BooksTab = useStableComponent(() => {
     if (booksView === "testaments") {
       return (
         <div className="lectio-fade-in">
@@ -2105,9 +2120,9 @@ export default function LectioTracker() {
         </Card>
       </div>
     );
-  };
+  });
 
-  const AgpeyaTab = () => {
+  const AgpeyaTab = useStableComponent(() => {
     const fmtDayLabel = (d) => new Date(d + "T00:00:00").toLocaleDateString(undefined, { weekday: "short" });
     const heatColor = (count) => {
       if (count === 0) return PALETTE.wood;
@@ -2198,9 +2213,9 @@ export default function LectioTracker() {
         </Card>
       </div>
     );
-  };
+  });
 
-  const LeaderboardTab = () => {
+  const LeaderboardTab = useStableComponent(() => {
     const categories = [
       { key: "chaptersRead", icon: CheckCircle2, label: t("Total chapters read", "إجمالي الإصحاحات المقروءة"), unit: t("chapters", "إصحاحًا") },
       { key: "booksCompleted", icon: Library, label: t("Books completed", "الأسفار المكتملة"), unit: t("books", "سفرًا") },
@@ -2266,9 +2281,9 @@ export default function LectioTracker() {
         })}
       </div>
     );
-  };
+  });
 
-  const ProfilePicker = () => {
+  const ProfilePicker = useStableComponent(() => {
     const submitNewProfile = () => {
       const name = (addingName || "").trim();
       if (!name) { setAddingName(null); setAddingIsKid(false); return; }
@@ -2385,9 +2400,9 @@ export default function LectioTracker() {
         </div>
       </div>
     );
-  };
+  });
 
-  const CertificateModal = () => {
+  const CertificateModal = useStableComponent(() => {
     const canvasRef = React.useRef(null);
     if (!certModal) return null;
 
@@ -2495,7 +2510,7 @@ export default function LectioTracker() {
         </div>
       </div>
     );
-  };
+  });
 
   // Leaderboard: the same stats computed for every profile, not just the
   // active one — profileData already holds everyone's synced data.
