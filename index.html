@@ -515,6 +515,13 @@ export default function LectioTracker() {
   const [kidBook, setKidBook] = useState(null);
   const [kidTestFilter, setKidTestFilter] = useState("all");
   const [justMarked, setJustMarked] = useState(null);
+  // These must be declared unconditionally, before any early return below —
+  // declaring them later (after the !loaded / !activeProfileId checks) meant
+  // they were only called on SOME renders, which is exactly what caused the
+  // "Rendered more hooks than during the previous render" crash.
+  const kidAppImplRef = React.useRef(null);
+  const kidChapterPanelImplRef = React.useRef(null);
+  const detailPanelImplRef = React.useRef(null);
   // Same reasoning as above — ProfilePicker also gets redefined on every
   // render, so its in-progress "adding a profile" state needs to live here.
   const [managing, setManaging] = useState(false);
@@ -1693,7 +1700,11 @@ export default function LectioTracker() {
     );
   };
 
-  const DetailPanel = () => {
+  // Same fix as KidApp/KidChapterPanel — DetailPanel was being torn down and
+  // rebuilt on every render (any tap, any sync event), which is what caused
+  // the flashing when toggling Not Read / Read / Read Again. It also holds
+  // VerseNotes, so this protects the verse picker's in-progress state too.
+  detailPanelImplRef.current = () => {
     if (!selected) return null;
     const { book, chapter } = selected;
     const k = keyFor(book, chapter);
@@ -2088,7 +2099,7 @@ export default function LectioTracker() {
             )}
           </span>
         </div>
-        {selected && selected.book === book.name && <DetailPanel />}
+        {selected && selected.book === book.name && <StableSlot slotRef={detailPanelImplRef} />}
         <Card>
           <ChapterGrid book={book} />
         </Card>
@@ -2521,8 +2532,6 @@ export default function LectioTracker() {
   // flashing. Storing the render logic in a ref and rendering it through the
   // module-level <StableSlot> component (which never changes identity)
   // avoids that entirely — React just updates it in place like normal.
-  const kidAppImplRef = React.useRef(null);
-  const kidChapterPanelImplRef = React.useRef(null);
   kidAppImplRef.current = () => {
     const weeklySorted = (key) => [...weeklyLeaderboardStats].sort((a, b) => b.stats[key] - a.stats[key]);
     const KP = KID_PALETTE;
