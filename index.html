@@ -562,6 +562,7 @@ export default function LectioTracker() {
 
   const [apiKey, setApiKeyValue] = useState("");
   const [apiKeySyncState, setApiKeySyncState] = useState("idle"); // "idle" | "saving" | "synced" | "error"
+  const apiKeyInputRef = React.useRef(null);
   const [showKeySettings, setShowKeySettings] = useState(false);
   const [certModal, setCertModal] = useState(null); // { type: "book", book: name } | { type: "canon" } | null
   const [cloudStatus, setCloudStatus] = useState("connecting"); // "connecting" | "online" | "offline"
@@ -3214,9 +3215,9 @@ export default function LectioTracker() {
                 {" "}{t("Synced across all your devices automatically — never included in backup files.", "تتم مزامنته تلقائيًا عبر جميع أجهزتك — لا يُدرج أبدًا في ملفات النسخ الاحتياطي.")}
               </p>
               <input
+                ref={apiKeyInputRef}
                 type="password"
                 defaultValue={apiKey}
-                onBlur={(e) => saveApiKey(e.target.value.trim())}
                 placeholder={t("Paste your API key", "الصق مفتاح API الخاص بك")}
                 className="w-full text-sm rounded-md px-3 py-2 outline-none mb-2"
                 style={{ background: PALETTE.bgSoft2, border: `1px solid ${PALETTE.wood}`, color: PALETTE.parchment }}
@@ -3227,9 +3228,18 @@ export default function LectioTracker() {
                   : apiKeySyncState === "error" ? t("Saved on this device, but couldn't sync to the cloud — check your connection and try again.", "حُفظ على هذا الجهاز، لكن تعذّرت المزامنة مع السحابة — تحقق من اتصالك وحاول مجددًا.")
                   : ""}
               </p>
-              <button onClick={() => setShowKeySettings(false)} className="text-xs rounded-full px-4 py-2 w-full" style={{ background: PALETTE.gold, color: PALETTE.ink }}>
-                {t("Done", "تم")}
-              </button>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => saveApiKey((apiKeyInputRef.current ? apiKeyInputRef.current.value : "").trim())}
+                  className="text-xs rounded-full px-4 py-2 flex-1"
+                  style={{ background: PALETTE.gold, color: PALETTE.ink }}
+                >
+                  {t("Save", "حفظ")}
+                </button>
+                <button onClick={() => setShowKeySettings(false)} className="text-xs rounded-full px-4 py-2 flex-1" style={{ background: "transparent", border: `1px solid ${PALETTE.wood}`, color: PALETTE.muted }}>
+                  {t("Close", "إغلاق")}
+                </button>
+              </div>
             </div>
           </div>
         )}
