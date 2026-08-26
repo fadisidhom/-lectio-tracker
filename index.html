@@ -424,13 +424,26 @@ async function deleteCloudProfile(id) {
 }
 
 // --- API.Bible (NKJV verse lookup) ---
-// The key lives in its own localStorage entry, separate from the reading
-// data, so it's never swept into an exported/imported backup file.
+// The key is stored in a small shared Supabase table so entering it on one
+// device makes it available on every device/profile — not just the browser
+// it was typed into. localStorage still keeps a local copy purely as an
+// offline fallback cache, same pattern as the reading data itself. It's
+// still never included in the reading-data backup export/import, since
+// that's a separate concern (a credential, not tracked progress).
 function getApiBibleKey() {
   try { return localStorage.getItem(APIBIBLE_KEY_STORAGE) || ""; } catch (e) { return ""; }
 }
-function setApiBibleKey(key) {
+function cacheApiBibleKeyLocally(key) {
   try { localStorage.setItem(APIBIBLE_KEY_STORAGE, key); return true; } catch (e) { return false; }
+}
+async function fetchCloudApiKey() {
+  const { data, error } = await supabase.from("app_settings").select("nkjv_api_key").eq("id", "singleton").maybeSingle();
+  if (error) throw error;
+  return (data && data.nkjv_api_key) || "";
+}
+async function pushCloudApiKey(key) {
+  const { error } = await supabase.from("app_settings").upsert({ id: "singleton", nkjv_api_key: key }, { onConflict: "id" });
+  if (error) throw error;
 }
 function getCachedNkjvId() {
   try { return localStorage.getItem(APIBIBLE_ID_STORAGE) || ""; } catch (e) { return ""; }
@@ -548,6 +561,7 @@ export default function LectioTracker() {
   const [expandedStat, setExpandedStat] = useState(null);
 
   const [apiKey, setApiKeyValue] = useState("");
+  const [apiKeySyncState, setApiKeySyncState] = useState("idle"); // "idle" | "saving" | "synced" | "error"
   const [showKeySettings, setShowKeySettings] = useState(false);
   const [certModal, setCertModal] = useState(null); // { type: "book", book: name } | { type: "canon" } | null
   const [cloudStatus, setCloudStatus] = useState("connecting"); // "connecting" | "online" | "offline"
@@ -589,7 +603,17 @@ export default function LectioTracker() {
       }
       setCloudStatus(status);
       setActiveProfileId(null); // always land on the profile picker on a fresh load
-      setApiKeyValue(getApiBibleKey());
+      try {
+        const cloudKey = await fetchCloudApiKey();
+        if (cloudKey) {
+          setApiKeyValue(cloudKey);
+          cacheApiBibleKeyLocally(cloudKey);
+        } else {
+          setApiKeyValue(getApiBibleKey()); // cloud has nothing yet — fall back to this device's local copy
+        }
+      } catch (e) {
+        setApiKeyValue(getApiBibleKey()); // couldn't reach the cloud — fall back to this device's local copy
+      }
       setLoaded(true);
     })();
     return () => { cancelled = true; };
@@ -635,7 +659,14 @@ export default function LectioTracker() {
 
   const saveApiKey = (key) => {
     setApiKeyValue(key);
-    setApiBibleKey(key);
+    cacheApiBibleKeyLocally(key);
+    setApiKeySyncState("saving");
+    pushCloudApiKey(key)
+      .then(() => setApiKeySyncState("synced"))
+      .catch((err) => {
+        console.error("Failed to sync API key to Supabase:", err); // surfaced on purpose — silently swallowing this is what hid the real bug before
+        setApiKeySyncState("error");
+      });
   };
 
   const persist = useCallback((nextProfiles, nextProfileData) => {
@@ -3180,16 +3211,22 @@ export default function LectioTracker() {
               <p className="text-xs mb-3" style={{ color: PALETTE.muted }}>
                 {t("Used only to fetch NKJV verse text when you tap \"Remember a verse.\" Get a free key at ", "يُستخدم فقط لجلب نص NKJV عند الضغط على \"احفظ شاهدًا\". احصل على مفتاح مجاني من ")}
                 <a href="https://scripture.api.bible" target="_blank" rel="noreferrer" style={{ color: PALETTE.gold }}>scripture.api.bible</a>.
-                {" "}{t("Stored only in this browser — never included in backup files.", "يُخزَّن في هذا المتصفح فقط — لا يُدرج أبدًا في ملفات النسخ الاحتياطي.")}
+                {" "}{t("Synced across all your devices automatically — never included in backup files.", "تتم مزامنته تلقائيًا عبر جميع أجهزتك — لا يُدرج أبدًا في ملفات النسخ الاحتياطي.")}
               </p>
               <input
                 type="password"
                 defaultValue={apiKey}
                 onBlur={(e) => saveApiKey(e.target.value.trim())}
                 placeholder={t("Paste your API key", "الصق مفتاح API الخاص بك")}
-                className="w-full text-sm rounded-md px-3 py-2 outline-none mb-3"
+                className="w-full text-sm rounded-md px-3 py-2 outline-none mb-2"
                 style={{ background: PALETTE.bgSoft2, border: `1px solid ${PALETTE.wood}`, color: PALETTE.parchment }}
               />
+              <p className="text-xs mb-3" style={{ color: apiKeySyncState === "error" ? PALETTE.burgundy : PALETTE.muted }}>
+                {apiKeySyncState === "saving" ? t("Syncing…", "جارٍ المزامنة…")
+                  : apiKeySyncState === "synced" ? t("Synced to all your devices.", "تمت المزامنة مع جميع أجهزتك.")
+                  : apiKeySyncState === "error" ? t("Saved on this device, but couldn't sync to the cloud — check your connection and try again.", "حُفظ على هذا الجهاز، لكن تعذّرت المزامنة مع السحابة — تحقق من اتصالك وحاول مجددًا.")
+                  : ""}
+              </p>
               <button onClick={() => setShowKeySettings(false)} className="text-xs rounded-full px-4 py-2 w-full" style={{ background: PALETTE.gold, color: PALETTE.ink }}>
                 {t("Done", "تم")}
               </button>
