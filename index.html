@@ -22,7 +22,7 @@
     "react-dom/client": "https://esm.sh/react-dom@18.3.1/client?deps=react@18.3.1",
     "recharts": "https://esm.sh/recharts@2.12.7?deps=react@18.3.1,react-dom@18.3.1",
     "lucide-react": "https://esm.sh/lucide-react@0.383.0?deps=react@18.3.1",
-    "@supabase/supabase-js": "https://esm.sh/@supabase/supabase-js@2.45.4"
+    "@supabase/supabase-js": "https://esm.sh/@supabase/supabase-js@2"
   }
 }
 </script>
@@ -1969,7 +1969,7 @@ export default function LectioTracker() {
     );
   });
 
-  const ChapterGrid = useStableComponent(({ book }) => {
+  const ChapterGrid = useStableComponent(({ book, selectMode, selectedChapters, onToggleSelect }) => {
     const cells = Array.from({ length: book.chapters }, (_, i) => i + 1);
     const tst = testamentOf(book.testament);
     return (
@@ -1979,29 +1979,32 @@ export default function LectioTracker() {
           const isRead = entries.length > 0;
           const isReread = entries.length > 1;
           const isSelected = selected && selected.book === book.name && selected.chapter === c;
+          const isPicked = selectMode && selectedChapters && selectedChapters.has(c);
           const sortedDates = isRead ? entries.slice().sort((a, b) => (a.date < b.date ? 1 : -1)).map((e) => fmtDate(e.date)) : [];
-          const tooltip = isRead
+          const tooltip = selectMode
+            ? undefined
+            : isRead
             ? (isReread ? t(`Read ${entries.length}× — ${sortedDates.join(", ")}`, `قُرئ ${entries.length} مرات — ${sortedDates.join("، ")}`) : t(`Read once — ${sortedDates[0]}`, `قُرئ مرة واحدة — ${sortedDates[0]}`))
             : t("Click to set status", "اضغط لتحديد الحالة");
           return (
             <button
               key={c}
-              onClick={() => handleCellClick(book.name, c)}
+              onClick={() => (selectMode ? onToggleSelect(c) : handleCellClick(book.name, c))}
               title={tooltip}
               className="lectio-cell relative rounded-xl text-xs font-semibold flex items-center justify-center"
               style={{
                 width: 34, height: 34,
                 background: isRead ? `linear-gradient(150deg, ${tst.color}, ${tst.colorDeep})` : "rgba(255,255,255,0.02)",
-                border: `1.5px solid ${isRead ? (isReread ? PALETTE.amber : t.color) : PALETTE.inkSoft}`,
+                border: `1.5px solid ${isPicked ? PALETTE.gold : isRead ? (isReread ? PALETTE.amber : tst.color) : PALETTE.inkSoft}`,
                 color: PALETTE.parchment,
                 opacity: isRead ? 1 : 0.55,
-                boxShadow: isRead ? "0 2px 6px rgba(0,0,0,0.3)" : "none",
-                outline: isSelected ? `2px solid ${PALETTE.gold}` : "none",
+                boxShadow: isPicked ? `0 0 0 2px ${PALETTE.gold}` : isRead ? "0 2px 6px rgba(0,0,0,0.3)" : "none",
+                outline: !selectMode && isSelected ? `2px solid ${PALETTE.gold}` : "none",
                 outlineOffset: 1,
               }}
             >
-              {c}
-              {isReread && (
+              {isPicked ? <CheckCircle2 size={16} color={PALETTE.gold} /> : c}
+              {!selectMode && isReread && (
                 <span
                   className="lectio-reread-badge absolute flex items-center justify-center text-[9px] font-bold rounded-full"
                   style={{ top: -7, right: -7, minWidth: 16, height: 16, padding: "0 3px", background: `linear-gradient(135deg, ${PALETTE.amber}, ${PALETTE.amberDeep})`, color: PALETTE.parchment, border: `1.5px solid ${PALETTE.bg}` }}
@@ -2017,6 +2020,54 @@ export default function LectioTracker() {
   });
 
   const BooksTab = useStableComponent(() => {
+    const [selectMode, setSelectMode] = useState(false);
+    const [selectedChapters, setSelectedChapters] = useState(() => new Set());
+
+    const toggleSelectChapter = (c) => {
+      setSelectedChapters((prev) => {
+        const next = new Set(prev);
+        if (next.has(c)) next.delete(c); else next.add(c);
+        return next;
+      });
+    };
+    const exitSelectMode = () => { setSelectMode(false); setSelectedChapters(new Set()); };
+
+    // Marks the given chapters as read, in one batched update — not a loop
+    // of individual taps. Chapters already read are left untouched (no
+    // duplicate re-read entries). Newly-marked chapters get spread one-per-
+    // day across the days leading up to yesterday, in chapter order, so it
+    // reads as a genuine streak — today stays free for whatever's read today.
+    const bulkMarkChaptersRead = (book, chapterNumbers) => {
+      const sorted = [...chapterNumbers].sort((a, b) => a - b);
+      updateReadings((prev) => {
+        const next = { ...prev };
+        const toMark = [];
+        sorted.forEach((c) => {
+          const k = keyFor(book, c);
+          if (!next[k] || next[k].length === 0) toMark.push(k);
+        });
+        toMark.forEach((k, i) => {
+          const daysAgo = toMark.length - i; // most recent chapter -> yesterday, earliest -> furthest back
+          const d = new Date(Date.now() - daysAgo * DAY_MS).toISOString().slice(0, 10);
+          next[k] = [{ id: makeId(), date: d }];
+        });
+        return next;
+      });
+    };
+
+    // The reverse — clears ALL reading history (including any re-reads) for
+    // the given chapters, in one batched update.
+    const bulkUnmarkChaptersRead = (book, chapterNumbers) => {
+      updateReadings((prev) => {
+        const next = { ...prev };
+        chapterNumbers.forEach((c) => {
+          const k = keyFor(book, c);
+          if (next[k]) delete next[k];
+        });
+        return next;
+      });
+    };
+
     if (booksView === "testaments") {
       return (
         <div className="lectio-fade-in">
@@ -2128,9 +2179,9 @@ export default function LectioTracker() {
     return (
       <div className="lectio-fade-in">
         <div className="flex items-center gap-1 text-sm mb-3" style={{ color: PALETTE.gold }}>
-          <button onClick={() => { setBooksView("testaments"); setSelected(null); }} className="flex items-center gap-1">{testamentLabel(book.testament)}</button>
+          <button onClick={() => { setBooksView("testaments"); setSelected(null); exitSelectMode(); }} className="flex items-center gap-1">{testamentLabel(book.testament)}</button>
           <ChevronRight size={13} color={PALETTE.muted} />
-          <button onClick={() => { setBooksView("grid"); setSelected(null); }}>{t("All books", "كل الأسفار")}</button>
+          <button onClick={() => { setBooksView("grid"); setSelected(null); exitSelectMode(); }}>{t("All books", "كل الأسفار")}</button>
         </div>
         <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
           <h2 className="lectio-display text-2xl" style={{ color: PALETTE.parchment }}>{bookLabel(book.name)}</h2>
@@ -2148,9 +2199,69 @@ export default function LectioTracker() {
             )}
           </span>
         </div>
+
+        {!selectMode ? (
+          <button onClick={() => { setSelectMode(true); setSelected(null); }} className="mb-4 flex items-center gap-1.5 text-sm rounded-full px-3 py-1.5" style={{ background: PALETTE.bgSoft, border: `1px solid ${PALETTE.wood}`, color: PALETTE.gold }}>
+            <CheckCircle2 size={14} /> {t("Select chapters", "اختر إصحاحات")}
+          </button>
+        ) : (
+          <div className="mb-4 rounded-xl p-3 flex flex-wrap items-center gap-2" style={{ background: PALETTE.bgSoft, border: `1px solid ${PALETTE.goldSoft}` }}>
+            <span className="text-sm font-semibold" style={{ color: PALETTE.parchment }}>
+              {t(`${selectedChapters.size} selected`, `تم اختيار ${selectedChapters.size}`)}
+            </span>
+            <button
+              onClick={() => setSelectedChapters(selectedChapters.size === book.chapters ? new Set() : new Set(Array.from({ length: book.chapters }, (_, i) => i + 1)))}
+              className="text-xs rounded-full px-3 py-1.5"
+              style={{ background: "transparent", border: `1px solid ${PALETTE.wood}`, color: PALETTE.muted }}
+            >
+              {selectedChapters.size === book.chapters ? t("Deselect all", "إلغاء تحديد الكل") : t("Select all", "تحديد الكل")}
+            </button>
+            <div className="flex-1" />
+            <button
+              disabled={selectedChapters.size === 0}
+              onClick={() => {
+                const n = selectedChapters.size;
+                const ok = window.confirm(
+                  t(
+                    `Mark ${n} chapter${n === 1 ? "" : "s"} as read? They'll be spread across the past ${n} day${n === 1 ? "" : "s"} (one per day, ending yesterday, in chapter order) so it reads as a real streak — today stays free for whatever you read today.`,
+                    `تعليم ${n} إصحاحًا كمقروء؟ سيتم توزيعها على آخر ${n} يومًا (إصحاح واحد لكل يوم، وينتهي بالأمس، بترتيب الإصحاحات) لتبدو كسلسلة حقيقية — يبقى اليوم متاحًا لما تقرأه اليوم.`
+                  )
+                );
+                if (ok) bulkMarkChaptersRead(book.name, Array.from(selectedChapters));
+                exitSelectMode();
+              }}
+              className="text-xs rounded-full px-3 py-1.5"
+              style={{ background: PALETTE.gold, color: PALETTE.ink, opacity: selectedChapters.size === 0 ? 0.5 : 1 }}
+            >
+              {t("Mark as read", "علّمها كمقروءة")}
+            </button>
+            <button
+              disabled={selectedChapters.size === 0}
+              onClick={() => {
+                const n = selectedChapters.size;
+                const ok = window.confirm(
+                  t(
+                    `Clear ${n} chapter${n === 1 ? "" : "s"}? This removes all reading history for them, including any re-reads. This can't be undone.`,
+                    `مسح ${n} إصحاحًا؟ سيؤدي هذا لحذف كل سجل القراءة لها، بما في ذلك أي إعادة قراءة. لا يمكن التراجع عن هذا.`
+                  )
+                );
+                if (ok) bulkUnmarkChaptersRead(book.name, Array.from(selectedChapters));
+                exitSelectMode();
+              }}
+              className="text-xs rounded-full px-3 py-1.5"
+              style={{ background: PALETTE.burgundy, color: PALETTE.parchment, opacity: selectedChapters.size === 0 ? 0.5 : 1 }}
+            >
+              {t("Mark as unread", "علّمها كغير مقروءة")}
+            </button>
+            <button onClick={exitSelectMode} className="text-xs rounded-full px-3 py-1.5" style={{ background: "transparent", border: `1px solid ${PALETTE.wood}`, color: PALETTE.muted }}>
+              {t("Cancel", "إلغاء")}
+            </button>
+          </div>
+        )}
+
         {selected && selected.book === book.name && <StableSlot slotRef={detailPanelImplRef} />}
         <Card>
-          <ChapterGrid book={book} />
+          <ChapterGrid book={book} selectMode={selectMode} selectedChapters={selectedChapters} onToggleSelect={toggleSelectChapter} />
         </Card>
       </div>
     );
