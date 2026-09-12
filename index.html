@@ -180,6 +180,341 @@ const AGPEYA_PRAYERS_AR = {
   prime: "باكر", terce: "الساعة الثالثة", sext: "الساعة السادسة", none: "الساعة التاسعة",
   vespers: "الغروب", compline: "النوم", midnight: "نصف الليل",
 };
+
+// ---- Coptic Calendar -----------------------------------------------------
+// Pure date-math conversion between Gregorian and Coptic calendars — no
+// network call or library needed, works for any date. Uses the standard
+// Julian-Day-Number method (Fliegel & Van Flandern for the Gregorian side,
+// the classic Coptic epoch constant for the Coptic side). Verified against
+// known reference points: Coptic New Year (El-Nayrouz), Coptic Christmas
+// (29 Koiak), and the leap-year boundary shift.
+const COPTIC_MONTHS_EN = ["Thout", "Paopi", "Hathor", "Koiak", "Tobi", "Meshir", "Paremhat", "Parmouti", "Pashons", "Paoni", "Epip", "Mesra", "Nasie"];
+const COPTIC_MONTHS_AR = ["توت", "بابه", "هاتور", "كيهك", "طوبة", "أمشير", "برمهات", "برمودة", "بشنس", "بؤونة", "أبيب", "مسرى", "النسيء"];
+const COPTIC_EPOCH_JDN = 1825030; // JDN of 1 Thout, Coptic year 1 (29 Aug 284 CE, Julian)
+
+function gregorianToJDN(year, month, day) {
+  const a = Math.floor((14 - month) / 12);
+  const y = year + 4800 - a;
+  const m = month + 12 * a - 3;
+  return day + Math.floor((153 * m + 2) / 5) + 365 * y + Math.floor(y / 4) - Math.floor(y / 100) + Math.floor(y / 400) - 32045;
+}
+function copticToJDN(year, month, day) {
+  return COPTIC_EPOCH_JDN - 1 + 365 * (year - 1) + Math.floor(year / 4) + 30 * (month - 1) + day;
+}
+function jdnToCoptic(jdn) {
+  const year = Math.floor((4 * (jdn - COPTIC_EPOCH_JDN) + 1463) / 1461);
+  const month = Math.floor((jdn - copticToJDN(year, 1, 1)) / 30) + 1;
+  const day = jdn - copticToJDN(year, month, 1) + 1;
+  return { year, month, day };
+}
+// dateStr: "YYYY-MM-DD" (Gregorian) -> { year, month, day } (Coptic)
+function gregorianToCoptic(dateStr) {
+  const [y, m, d] = dateStr.split("-").map(Number);
+  return jdnToCoptic(gregorianToJDN(y, m, d));
+}
+function copticDateLabel(c, lang) {
+  const months = lang === "ar" ? COPTIC_MONTHS_AR : COPTIC_MONTHS_EN;
+  return lang === "ar" ? `${c.day} ${months[c.month - 1]} ${c.year} للشهداء` : `${c.day} ${months[c.month - 1]} ${c.year} A.M.`;
+}
+
+// Bilingual Synaxarium entries, keyed by Coptic "month-day" (month 1 =
+// Thout). Each day is an ARRAY of items — one per titled commemoration
+// St-Takla.org lists for that day, so nothing gets merged or dropped.
+// Each item is a concise, original summary (not copied wording) of that
+// title's fuller description. Coverage starts with Thout, the current
+// Coptic month — the rest of the year is being filled in progressively.
+// A day with no verified commemoration shows an honest placeholder
+// rather than a guess.
+const SYNAXARIUM = {
+  "1-1": [
+    { en: "The Feast of El-Nayrouz — the Coptic New Year, opening the Era of the Martyrs.", ar: "عيد النيروز، رأس السنة القبطية وبداية عصر الشهداء." },
+    { en: "The martyrdom of St. Bartholomew, one of the Twelve Apostles.", ar: "استشهاد القديس برثولماوس، أحد التلاميذ الاثني عشر." },
+    { en: "The departure of St. Melyos (Milius), third Pope of Alexandria.", ar: "نياحة القديس مليوس، بابا الإسكندرية الثالث." },
+  ],
+  "1-2": [
+    { en: "The martyrdom of St. John the Baptist, beheaded on Herod's orders after rebuking him for marrying his brother's wife; his head was later said to be preserved at Homs, Syria.", ar: "استشهاد يوحنا المعمدان الذي قطع هيرودس رأسه بعدما وبّخه على زواجه من زوجة أخيه، وقيل إن رأسه الطاهر حُفظ لاحقًا في مدينة حمص بسوريا." },
+    { en: "The martyrdom of St. Dasya, a Roman soldier from Tanda, Egypt, tortured and beheaded by the governor Arianus for his faith in Christ.", ar: "استشهاد القديس دايسا، جندي روماني من بلدة تاندا المصرية، عذّبه الوالي أريانوس وقطع رأسه بسبب إيمانه بالمسيح." },
+  ],
+  "1-3": [
+    { en: "A synod of bishops convened in Alexandria under Pope Dionysius in 243 A.D.", ar: "انعقاد مجمع للأساقفة في الإسكندرية في عهد البابا ديونيسيوس سنة 243 م." },
+    { en: "The great earthquake that struck Cairo and much of Egypt in 1112 A.D.", ar: "الزلزال العظيم الذي ضرب القاهرة ومعظم مدن مصر سنة 1112 م." },
+  ],
+  "1-4": [
+    { en: "The departure of St. Macarius, the 69th Pope of Alexandria.", ar: "نياحة القديس مكاريوس، البابا التاسع والستون للإسكندرية." },
+  ],
+  "1-5": [
+    { en: "The martyrdom of St. Sophia.", ar: "استشهاد القديسة صوفيا." },
+  ],
+  "1-6": [
+    { en: "The departure of the Prophet Isaiah.", ar: "نياحة النبي إشعياء." },
+    { en: "The martyrdom of St. Basilissa.", ar: "استشهاد القديسة باسيليسا." },
+  ],
+  "1-7": [
+    { en: "The departure of St. Dioscorus, 25th Pope of Alexandria.", ar: "نياحة القديس ديسقورس، البابا الخامس والعشرون للإسكندرية." },
+    { en: "The martyrdom of St. Rebecca and her children Agathon, Peter, John, Amun, and Amuna.", ar: "استشهاد القديسة ريبيكا وأولادها أغاثون وبطرس ويوحنا وآمون وآمونة." },
+    { en: "The departure of St. Severianus, Bishop of Gabala.", ar: "نياحة القديس سويريانوس أسقف غبالة." },
+  ],
+  "1-8": [
+    { en: "The martyrdom of the Prophet Zechariah.", ar: "استشهاد النبي زكريا." },
+    { en: "The departure of the Prophet Moses.", ar: "نياحة النبي موسى." },
+    { en: "The martyrdom of St. Diomedes (Dimides).", ar: "استشهاد القديس ديوميدس." },
+  ],
+  "1-9": [
+    { en: "The martyrdom of St. Pisora the Bishop.", ar: "استشهاد القديس بيسورا الأسقف." },
+  ],
+  "1-10": [
+    { en: "The martyrdom of St. Matruna.", ar: "استشهاد القديسة ماترونا." },
+    { en: "The commemoration of St. Basin and her three children.", ar: "تذكار القديسة باسين وأولادها الثلاثة." },
+  ],
+  "1-11": [
+    { en: "The martyrdom of St. Basilides.", ar: "استشهاد القديس باسيليدس." },
+  ],
+  "1-12": [
+    { en: "The Third Ecumenical Council convened at Ephesus, addressing the teaching of Nestorius.", ar: "انعقاد المجمع المسكوني الثالث بأفسس لمحاكمة تعليم نسطور." },
+    { en: "The transfer of the relics of St. Clement (Aklimos) and his companions.", ar: "نقل رفات القديس أكليمس ورفقائه." },
+  ],
+  "1-13": [
+    { en: "The departure of Pope Matthew II, 90th Patriarch of Alexandria — a monk of El-Muharraq monastery who sat on the throne of St. Mark for 13 years.", ar: "نياحة البابا متاؤس الثاني، البطريرك التسعون للإسكندرية، وكان راهبًا بدير المحرق وجلس على كرسي مارمرقس ثلاث عشرة سنة." },
+    { en: "The commemoration of a miracle performed by St. Basil, Bishop of Caesarea.", ar: "تذكار معجزة صنعها القديس باسيليوس أسقف قيصرية." },
+  ],
+  "1-14": [
+    { en: "The departure of St. Agathon the Stylite.", ar: "نياحة القديس أغاثون العمودي." },
+  ],
+  "1-15": [
+    { en: "The translocation of the relics of St. Stephen, Archdeacon and first martyr.", ar: "نقل رفات القديس إسطفانوس رئيس الشمامسة وأول الشهداء." },
+  ],
+  "1-16": [
+    { en: "The consecration of the sanctuaries of the Church of the Resurrection in Jerusalem.", ar: "تكريس مذابح كنيسة القيامة بأورشليم." },
+    { en: "The translocation of the relics of St. John Chrysostom.", ar: "نقل رفات القديس يوحنا ذهبي الفم." },
+  ],
+  "1-17": [
+    { en: "The Feast of the Consecration of the Church of the Honorable Cross.", ar: "عيد تكريس كنيسة الصليب الكريم." },
+    { en: "The departure of St. Theognosta.", ar: "نياحة القديسة ثيؤغنسطة." },
+  ],
+  "1-18": [
+    { en: "The martyrdom of St. Porphyrius.", ar: "استشهاد القديس بورفيريوس." },
+    { en: "The commemoration of Stephen the Priest and St. Niketa the Martyr.", ar: "تذكار إسطفانوس الكاهن والقديسة نيكيتا الشهيدة." },
+  ],
+  "1-19": [
+    { en: "The commemoration of St. Gregory, Patriarch of the Armenians.", ar: "تذكار القديس غريغوريوس بطريرك الأرمن." },
+  ],
+  "1-20": [
+    { en: "The martyrdom of St. Melitina the Virgin.", ar: "استشهاد القديسة مليتينا العذراء." },
+  ],
+  "1-21": [
+    { en: "The commemoration of the Virgin St. Mary, the Theotokos, through whom came the salvation of Adam and his descendants.", ar: "تذكار السيدة العذراء مريم، والدة الإله، التي بها تم خلاص آدم وذريته." },
+  ],
+  "1-22": [
+    { en: "The martyrdom of Sts. Cotylas, his sister Axoua, and his companion Tatas.", ar: "استشهاد القديس كوتيلاس وأخته أكسوا ورفيقه تاتاس." },
+    { en: "The martyrdom of St. Julius of Aqfahs, chronicler of the lives of the martyrs.", ar: "استشهاد القديس يوليوس الأقفهصي، كاتب سير الشهداء." },
+  ],
+  "1-23": [
+    { en: "The martyrdom of Sts. Eunapios and Andrew.", ar: "استشهاد القديسين أونابيوس وأندراوس." },
+    { en: "The martyrdom of St. Thecla, honored as the bride of Christ and the first female martyr.", ar: "استشهاد القديسة تكلا، عروس المسيح وأول الشهيدات." },
+    { en: "The re-opening, in the year 1029 A.M., of the Church of the Virgin in Haret El-Roum, Cairo, after eleven years closed.", ar: "إعادة افتتاح كنيسة العذراء بحارة الروم بالقاهرة سنة ١٠٢٩ للشهداء، بعد إغلاق دام أحد عشر عامًا." },
+  ],
+  "1-24": [
+    { en: "The departure of St. Gregory the Ascetic.", ar: "نياحة القديس غريغوريوس الناسك." },
+    { en: "The martyrdom of St. Quadratus, one of the Seventy Disciples.", ar: "استشهاد القديس كوادراتوس أحد السبعين رسولًا." },
+  ],
+  "1-25": [
+    { en: "The departure of the Prophet Jonah.", ar: "نياحة النبي يونان." },
+    { en: "The martyrdom of St. Maurice and the Theban Legion.", ar: "استشهاد القديس موريس وكتيبة طيبة." },
+  ],
+  "1-26": [
+    { en: "No commemoration for this day has been verified against a source yet.", ar: "لم يُتحقق بعد من تذكار لهذا اليوم من أحد المصادر." },
+  ],
+  "1-27": [
+    { en: "The martyrdom of St. Eustathius and his two sons.", ar: "استشهاد القديس أوسطاثيوس وابنيه." },
+  ],
+  "1-28": [
+    { en: "The martyrdom of St. Apater (Abadir) and his sister St. Herai (Eraee).", ar: "استشهاد القديس أبادير وأخته القديسة إيرايي." },
+  ],
+  "1-29": [
+    { en: "The martyrdom of St. Rhipsime (Arbsima) the Virgin and her fellow virgins.", ar: "استشهاد القديسة أربسيمة العذراء ورفيقاتها العذارى." },
+  ],
+  "1-30": [
+    { en: "The commemoration of a miracle God performed for St. Athanasius the Apostolic.", ar: "تذكار معجزة صنعها الله للقديس أثناسيوس الرسولي." },
+  ],
+
+  // ---- Paopi (month 2) ----
+  "2-1": [{ en: "The martyrdom of St. Anastasia.", ar: "استشهاد القديسة أنسطاسيا." }],
+  "2-2": [{ en: "The arrival of St. Severus, Patriarch of Antioch, in Egypt.", ar: "وصول القديس ساويرس بطريرك أنطاكية إلى مصر." }],
+  "2-3": [
+    { en: "The departure of St. Simeon II, 51st Pope of Alexandria.", ar: "نياحة القديس سمعان الثاني، البابا الحادي والخمسون للإسكندرية." },
+    { en: "The martyrdom of St. John the Soldier.", ar: "استشهاد القديس يوحنا الجندي." },
+  ],
+  "2-4": [{ en: "The martyrdom of St. Bacchus, companion of St. Sergius.", ar: "استشهاد القديس باخوس رفيق القديس سرجيوس." }],
+  "2-5": [{ en: "The martyrdom of St. Paul, Patriarch of Constantinople.", ar: "استشهاد القديس بولس بطريرك القسطنطينية." }],
+  "2-6": [{ en: "The departure of the righteous Hannah, prophetess and mother of the Prophet Samuel.", ar: "نياحة البارة حنة النبية، أم صموئيل النبي." }],
+  "2-7": [{ en: "The departure of St. Paul of Tamouh.", ar: "نياحة القديس بولا التموحي." }],
+  "2-8": [
+    { en: "The martyrdom of St. Matra.", ar: "استشهاد القديسة ماطرة." },
+    { en: "The martyrdom of Abba Hor, of St. Tosia and her children, and of Abba Agathon the Hermit.", ar: "استشهاد الأنبا هور، والقديسة توسية وأولادها، والأنبا أغاثون الناسك." },
+  ],
+  "2-9": [
+    { en: "The departure of St. Eumenius, seventh Pope of Alexandria.", ar: "نياحة القديس أومانيوس، البابا السابع للإسكندرية." },
+    { en: "A solar eclipse in the year 958 A.M.", ar: "كسوف الشمس في سنة ٩٥٨ للشهداء." },
+    { en: "The commemoration of St. Simon the Bishop.", ar: "تذكار القديس سيمون الأسقف." },
+  ],
+  "2-10": [{ en: "The martyrdom of St. Sergius, companion of St. Bacchus.", ar: "استشهاد القديس سرجيوس رفيق القديس باخوس." }],
+  "2-11": [
+    { en: "The departure of St. James, Patriarch of Antioch.", ar: "نياحة القديس يعقوب بطريرك أنطاكية." },
+    { en: "The departure of St. Pelagia.", ar: "نياحة القديسة بيلاجيا." },
+  ],
+  "2-12": [
+    { en: "The departure of Abba Demetrius I, 12th Pope of Alexandria.", ar: "نياحة الأنبا ديمتريوس الأول، البابا الثاني عشر للإسكندرية." },
+    { en: "The martyrdom of St. Matthew the Evangelist.", ar: "استشهاد القديس متى الإنجيلي." },
+    { en: "The commemorative feast of the Archangel Michael.", ar: "عيد تذكار الملاك ميخائيل رئيس الملائكة." },
+  ],
+  "2-13": [{ en: "The departure of St. Zacharias the Monk.", ar: "نياحة القديس زخارياس الراهب." }],
+  "2-14": [{ en: "The departure of St. Philip, one of the Seven Deacons.", ar: "نياحة القديس فيلبس أحد الشمامسة السبعة." }],
+  "2-15": [{ en: "The martyrdom of St. Panteleimon the Physician.", ar: "استشهاد القديس بنتليمون الطبيب." }],
+  "2-16": [
+    { en: "The departure of St. Agathon, 39th Pope of Alexandria.", ar: "نياحة القديس أغاثون، البابا التاسع والثلاثون للإسكندرية." },
+    { en: "The commemoration of Sts. Carpus, Apollos (Papylus), and Peter.", ar: "تذكار القديسين كاربوس وأبولوس (بابيلوس) وبطرس." },
+  ],
+  "2-17": [{ en: "No commemoration for this day has been verified against a source yet.", ar: "لم يُتحقق بعد من تذكار لهذا اليوم من أحد المصادر." }],
+  "2-18": [{ en: "No commemoration for this day has been verified against a source yet.", ar: "لم يُتحقق بعد من تذكار لهذا اليوم من أحد المصادر." }],
+  "2-19": [
+    { en: "A council convened at Antioch against Paul of Samosata.", ar: "انعقاد مجمع أنطاكية ضد بولس الساموساطي." },
+    { en: "The martyrdom of St. Theophilus and his wife in the Fayyum.", ar: "استشهاد القديس ثيؤفيلوس وزوجته في الفيوم." },
+  ],
+  "2-20": [{ en: "No commemoration for this day has been verified against a source yet.", ar: "لم يُتحقق بعد من تذكار لهذا اليوم من أحد المصادر." }],
+  "2-21": [
+    { en: "The commemoration of the Virgin St. Mary, the Theotokos.", ar: "تذكار السيدة العذراء مريم، والدة الإله." },
+    { en: "The relocation of the body of Lazarus.", ar: "نقل جسد لعازر." },
+    { en: "The departure of the Prophet Joel.", ar: "نياحة النبي يوئيل." },
+    { en: "The departure of St. Freig (Abba Tegi, Anba Roweiss).", ar: "نياحة القديس فريج (الأنبا تيجي، الأنبا رويس)." },
+  ],
+  "2-22": [{ en: "No commemoration for this day has been verified against a source yet.", ar: "لم يُتحقق بعد من تذكار لهذا اليوم من أحد المصادر." }],
+  "2-23": [
+    { en: "The departure of St. Yousab, 52nd Pope of Alexandria.", ar: "نياحة القديس يوساب، البابا الثاني والخمسون للإسكندرية." },
+    { en: "The martyrdom of St. Dionysius, Bishop of Corinth.", ar: "استشهاد القديس ديونيسيوس أسقف كورنثوس." },
+  ],
+  "2-24": [
+    { en: "The departure of Abba Hilarion.", ar: "نياحة الأنبا هيلاريون." },
+    { en: "The martyrdom of Sts. Paul, Longinus, and Deenah (Zena).", ar: "استشهاد القديسين بولس ولونجينوس وزينة." },
+  ],
+  "2-25": [
+    { en: "The departure of Sts. Apollo and Abib.", ar: "نياحة القديسين أبلو وأبيب." },
+    { en: "The consecration of the Church of St. Julius of Aqfahs.", ar: "تكريس كنيسة القديس يوليوس الأقفهصي." },
+  ],
+  "2-26": [
+    { en: "The martyrdom of St. Timon the Apostle.", ar: "استشهاد القديس تيمون الرسول." },
+    { en: "The commemoration of the Seven Martyrs on the Mount of St. Antony.", ar: "تذكار السبعة شهداء على جبل القديس أنطونيوس." },
+  ],
+  "2-27": [{ en: "No commemoration for this day has been verified against a source yet.", ar: "لم يُتحقق بعد من تذكار لهذا اليوم من أحد المصادر." }],
+  "2-28": [{ en: "The martyrdom of Sts. Marcian and Mercurius.", ar: "استشهاد القديسين مرقيان ومركوريوس." }],
+  "2-29": [{ en: "No commemoration for this day has been verified against a source yet.", ar: "لم يُتحقق بعد من تذكار لهذا اليوم من أحد المصادر." }],
+  "2-30": [
+    { en: "The consecration of the Church of St. Mark the Evangelist and the appearance of his holy head.", ar: "تكريس كنيسة القديس مرقس الإنجيلي وظهور رأسه الطاهر." },
+    { en: "The departure of St. Ibrahim the Hermit.", ar: "نياحة القديس إبراهيم الناسك." },
+  ],
+
+  // ---- Hathor (month 3) ----
+  "3-1": [
+    { en: "The martyrdom of Sts. Maximus, Numitius, Victor (Boctor), and Philip (Philopus).", ar: "استشهاد القديسين مكسيموس ونوميتيوس وفيكتور (بقطر) وفيلبس (فيلوباتير)." },
+    { en: "The commemoration of St. Cleopas the Apostle and his companion.", ar: "تذكار القديس كليوباس الرسول ورفيقه." },
+  ],
+  "3-2": [{ en: "The departure of St. Peter III, 27th Pope of Alexandria.", ar: "نياحة القديس بطرس الثالث، البابا السابع والعشرون للإسكندرية." }],
+  "3-3": [
+    { en: "The departure of St. Cyriacus the Anchorite.", ar: "نياحة القديس كيرياكوس الناسك." },
+    { en: "The departure of St. Athanasius and his sister St. Irene.", ar: "نياحة القديس أثناسيوس وأخته القديسة إيريني." },
+  ],
+  "3-4": [
+    { en: "The martyrdom of Sts. John and James, Bishops of Persia.", ar: "استشهاد القديسين يوحنا ويعقوب أسقفي بلاد فارس." },
+    { en: "The martyrdom of St. Epimachus and St. Adrianus (Azarianus).", ar: "استشهاد القديس أبيماخوس والقديس أدريانوس (أزريانوس)." },
+    { en: "The martyrdom of St. Thomas of Damascus.", ar: "استشهاد القديس توما الدمشقي." },
+  ],
+  "3-5": [
+    { en: "The appearance of the head of St. Longinus the Soldier.", ar: "ظهور رأس القديس لونجينوس الجندي." },
+    { en: "The martyrdom of St. Timothy and the relocation of the body of St. Theodore the Prince to Shotb.", ar: "استشهاد القديس تيموثاوس ونقل جسد الأمير تادرس إلى شطب." },
+    { en: "The departure of St. Joseph II, 115th Pope of Alexandria.", ar: "نياحة القديس يوساب الثاني، البابا الخامس عشر بعد المائة للإسكندرية." },
+    { en: "The enthronement of Pope Shenouda III, 117th Pope of Alexandria.", ar: "تجليس البابا شنودة الثالث، البابا السابع عشر بعد المائة للإسكندرية." },
+  ],
+  "3-6": [
+    { en: "The departure of St. Felix, 26th Bishop of Rome.", ar: "نياحة القديس فيلكس، أسقف رومية السادس والعشرون." },
+    { en: "The consecration of the Church of the Virgin in the Muharraq Monastery.", ar: "تكريس كنيسة العذراء بدير المحرق." },
+  ],
+  "3-7": [
+    { en: "The martyrdom of St. George of Alexandria.", ar: "استشهاد القديس جرجس الإسكندراني." },
+    { en: "The martyrdom of St. Nehroua of Fayyum.", ar: "استشهاد القديس نهروا الفيومي." },
+    { en: "The departure of St. Mina, Bishop of Tamai.", ar: "نياحة القديس مينا أسقف تمي." },
+    { en: "The consecration of the Church of St. George of Cappadocia.", ar: "تكريس كنيسة القديس جرجس الكبادوكي." },
+  ],
+  "3-8": [{ en: "The commemoration of the Four Incorporeal (Living) Creatures.", ar: "تذكار الأربعة كائنات غير المتجسدة." }],
+  "3-9": [
+    { en: "The departure of St. Isaac, 41st Pope of Alexandria.", ar: "نياحة القديس إسحق، البابا الحادي والأربعون للإسكندرية." },
+    { en: "The First Ecumenical Council convened at Nicaea in 325 A.D.", ar: "انعقاد المجمع المسكوني الأول بنيقية سنة 325 م." },
+  ],
+  "3-10": [
+    { en: "The martyrdom of St. Sophia and the Fifty Virgins.", ar: "استشهاد القديسة صوفيا والخمسين عذراء." },
+    { en: "A council convened in Rome regarding the Feast of Theophany and the fast.", ar: "انعقاد مجمع بروما بخصوص عيد الغطاس والصوم." },
+  ],
+  "3-11": [
+    { en: "The departure of St. Anne (Hannah), mother of the Theotokos.", ar: "نياحة القديسة حنة، أم السيدة العذراء." },
+    { en: "The martyrdom of St. Archelaus and of Elisha the Hegumen.", ar: "استشهاد القديس أرخيلاوس والقمص أليشع." },
+  ],
+  "3-12": [{ en: "The commemoration of Michael the Archangel.", ar: "تذكار الملاك ميخائيل رئيس الملائكة." }],
+  "3-13": [
+    { en: "The departure of St. Timothy, Bishop of Ansena.", ar: "نياحة القديس تيموثاوس أسقف أنصنا." },
+    { en: "The departure of St. Zacharias, 64th Pope of Alexandria.", ar: "نياحة القديس زخارياس، البابا الرابع والستون للإسكندرية." },
+  ],
+  "3-14": [
+    { en: "The departure of St. Martinus (Martin), Bishop of Thrace.", ar: "نياحة القديس مارتينوس أسقف تراقيا." },
+    { en: "The departure of Metropolitan Mikhail of Asyut.", ar: "نياحة المطران ميخائيل مطران أسيوط." },
+  ],
+  "3-15": [{ en: "The martyrdom of St. Menas the Wonder Worker.", ar: "استشهاد القديس مينا صانع العجائب." }],
+  "3-16": [
+    { en: "The beginning of the Fast of the Nativity (Advent) in the Coptic Church.", ar: "بدء صوم الميلاد في الكنيسة القبطية." },
+    { en: "The consecration of the Church of St. Onuphrius (Abu-Nofer).", ar: "تكريس كنيسة القديس أبانوب (أبو نفر)." },
+    { en: "The martyrdom of St. Justus the Bishop.", ar: "استشهاد القديس يوستوس الأسقف." },
+    { en: "The martyrdom of St. Wannas.", ar: "استشهاد القديس وناس." },
+  ],
+  "3-17": [{ en: "The departure of St. John Chrysostom.", ar: "نياحة القديس يوحنا ذهبي الفم." }],
+  "3-18": [
+    { en: "The martyrdom of Sts. Atrasis and Yoana (Junia).", ar: "استشهاد القديسين أتراسيس ويؤانا (يونيا)." },
+    { en: "The martyrdom of St. Philip the Apostle.", ar: "استشهاد القديس فيلبس الرسول." },
+  ],
+  "3-19": [
+    { en: "The consecration of the Church of Sts. Sergius and Bacchus.", ar: "تكريس كنيسة القديسين سرجيوس وباخوس." },
+    { en: "The commemoration of the preaching of St. Bartholomew the Apostle.", ar: "تذكار كرازة القديس برثولماوس الرسول." },
+  ],
+  "3-20": [
+    { en: "The departure of St. Anianus, 2nd Pope of Alexandria.", ar: "نياحة القديس أنيانوس، البابا الثاني للإسكندرية." },
+    { en: "The consecration of the churches of Prince Theodore, son of John El-Shotbe, and Prince Theodore El-Mishreke.", ar: "تكريس كنيستي الأمير تادرس بن يوحنا الشطبي والأمير تادرس المشرقي." },
+  ],
+  "3-21": [
+    { en: "The commemoration of the Virgin St. Mary, the Theotokos.", ar: "تذكار السيدة العذراء مريم، والدة الإله." },
+    { en: "The departure of St. Gregory the Wonder Worker.", ar: "نياحة القديس غريغوريوس صانع العجائب." },
+    { en: "The departure of St. Cosma II, 54th Pope of Alexandria.", ar: "نياحة القديس كزما الثاني، البابا الرابع والخمسون للإسكندرية." },
+    { en: "The commemoration of the martyrs Alphaeus, Zacchaeus, Romanus, and John, with Sts. Thomas, Victor, and Isaac of Ashmunein.", ar: "تذكار الشهداء ألفايوس وزكاوس ورومانوس ويوحنا، مع القديسين توما وفيكتور وإسحق أهل أشمونين." },
+  ],
+  "3-22": [{ en: "The martyrdom of Sts. Cosmas and Damian, their brothers, and their mother.", ar: "استشهاد القديسين كوزما ودميان وإخوتهما وأمهما." }],
+  "3-23": [
+    { en: "The departure of St. Cornelius the Centurion.", ar: "نياحة القديس كرنيليوس قائد المائة." },
+    { en: "The consecration of the Church of St. Marina.", ar: "تكريس كنيسة القديسة مارينا." },
+  ],
+  "3-24": [{ en: "The commemoration of the Twenty-Four Priests (Elders) of Heaven.", ar: "تذكار الأربعة والعشرين قسيسًا (الشيوخ)." }],
+  "3-25": [{ en: "The martyrdom of St. Mercurius, known as 'the saint with the two swords.'", ar: "استشهاد القديس مرقوريوس، صاحب السيفين." }],
+  "3-26": [
+    { en: "The martyrdom of Sts. Tiburtius, Valerian, and Maximus.", ar: "استشهاد القديسين تيبورتيوس وفاليريان ومكسيموس." },
+    { en: "The commemoration of St. Gregory, Bishop of Nyssa.", ar: "تذكار القديس غريغوريوس أسقف نيصص." },
+  ],
+  "3-27": [{ en: "The martyrdom of St. James the Mangled (Intercisus).", ar: "استشهاد القديس يعقوب المقطع." }],
+  "3-28": [{ en: "The martyrdom of St. Sarapamon, Bishop of Niku (Nikiou).", ar: "استشهاد القديس سرابامون أسقف نيكيوس." }],
+  "3-29": [
+    { en: "The martyrdom of St. Peter, 17th Pope of Alexandria.", ar: "استشهاد القديس بطرس، البابا السابع عشر للإسكندرية." },
+    { en: "The martyrdom of St. Clement, 4th Bishop of Rome.", ar: "استشهاد القديس إكليمنضس، أسقف رومية الرابع." },
+  ],
+  "3-30": [
+    { en: "The departure of St. Acacius, Patriarch of Constantinople.", ar: "نياحة القديس أكاكيوس بطريرك القسطنطينية." },
+    { en: "The martyrdom of St. Macarius.", ar: "استشهاد القديس مكاريوس." },
+    { en: "The consecration of the Church of Sts. Cosmas and Damian, their brothers, and their mother.", ar: "تكريس كنيسة القديسين كوزما ودميان وإخوتهما وأمهما." },
+  ],
+};
+
 const testamentOf = (key) => TESTAMENTS.find((t) => t.key === key);
 const todayStr = () => new Date().toISOString().slice(0, 10);
 const DAY_MS = 86400000;
@@ -2360,6 +2695,93 @@ export default function LectioTracker() {
     );
   });
 
+  const CalendarTab = useStableComponent(() => {
+    const [calDate, setCalDate] = useState(todayStr());
+    const coptic = gregorianToCoptic(calDate);
+    const entry = SYNAXARIUM[`${coptic.month}-${coptic.day}`];
+    const isToday = calDate === todayStr();
+
+    const shiftDay = (delta) => {
+      const d = new Date(calDate + "T00:00:00");
+      d.setDate(d.getDate() + delta);
+      setCalDate(d.toISOString().slice(0, 10));
+    };
+
+    return (
+      <div className="space-y-5 lectio-fade-in">
+        <Card>
+          <div className="flex items-center justify-between gap-3">
+            <button
+              onClick={() => shiftDay(-1)}
+              className="lectio-tile rounded-full p-2 flex-shrink-0"
+              style={{ background: PALETTE.bgSoft2, border: `1px solid ${PALETTE.wood}` }}
+            >
+              <ChevronLeft size={18} color={PALETTE.parchment} />
+            </button>
+            <div className="text-center">
+              <div className="text-xs" style={{ color: PALETTE.muted }}>{fmtDate(calDate)}</div>
+              <h3 className="lectio-display text-xl mt-0.5" style={{ color: PALETTE.gold }}>
+                {copticDateLabel(coptic, "en")}
+              </h3>
+              <div className="text-sm mt-0.5" dir="rtl" style={{ color: PALETTE.goldSoft }}>
+                {copticDateLabel(coptic, "ar")}
+              </div>
+            </div>
+            <button
+              onClick={() => shiftDay(1)}
+              className="lectio-tile rounded-full p-2 flex-shrink-0"
+              style={{ background: PALETTE.bgSoft2, border: `1px solid ${PALETTE.wood}` }}
+            >
+              <ChevronRight size={18} color={PALETTE.parchment} />
+            </button>
+          </div>
+          {!isToday && (
+            <div className="flex justify-center mt-3">
+              <button
+                onClick={() => setCalDate(todayStr())}
+                className="lectio-pill px-3 py-1 text-xs"
+                style={{ border: `1px solid ${PALETTE.wood}`, color: PALETTE.muted }}
+              >
+                {t("Jump to today", "الرجوع إلى اليوم")}
+              </button>
+            </div>
+          )}
+        </Card>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <Card>
+            <h4 className="lectio-display text-sm mb-2" style={{ color: PALETTE.parchment }}>Synaxarium — English</h4>
+            {entry ? (
+              <ul className="space-y-2 pl-4" style={{ listStyleType: "disc" }}>
+                {entry.map((item, i) => (
+                  <li key={i} className="text-sm leading-relaxed" style={{ color: PALETTE.parchmentSoft }}>{item.en}</li>
+                ))}
+              </ul>
+            ) : (
+              <p className="text-sm leading-relaxed" style={{ color: PALETTE.parchmentSoft }}>
+                This day hasn't been added yet — the Synaxarium is being filled in month by month.
+              </p>
+            )}
+          </Card>
+          <Card>
+            <h4 className="lectio-display text-sm mb-2 text-right" style={{ color: PALETTE.parchment }} dir="rtl">السنكسار — عربي</h4>
+            {entry ? (
+              <ul className="space-y-2 pr-4 text-right" dir="rtl" style={{ listStyleType: "disc" }}>
+                {entry.map((item, i) => (
+                  <li key={i} className="text-sm leading-relaxed" style={{ color: PALETTE.parchmentSoft }}>{item.ar}</li>
+                ))}
+              </ul>
+            ) : (
+              <p className="text-sm leading-relaxed text-right" dir="rtl" style={{ color: PALETTE.parchmentSoft }}>
+                لم تتم إضافة هذا اليوم بعد — يجري استكمال السنكسار شهرًا بعد شهر.
+              </p>
+            )}
+          </Card>
+        </div>
+      </div>
+    );
+  });
+
   const LeaderboardTab = useStableComponent(() => {
     const categories = [
       { key: "chaptersRead", icon: CheckCircle2, label: t("Total chapters read", "إجمالي الإصحاحات المقروءة"), unit: t("chapters", "إصحاحًا") },
@@ -3105,6 +3527,7 @@ export default function LectioTracker() {
   const NAV_TABS = [
     { v: "books", l: t("Books", "الأسفار"), icon: Library },
     { v: "agpeya", l: t("Agpeya", "الأجبية"), icon: Plus },
+    { v: "calendar", l: t("Calendar", "التقويم"), icon: Calendar },
     { v: "dashboard", l: t("Bible Stats", "إحصائيات الكتاب المقدس"), icon: TrendingUp },
     { v: "leaderboard", l: t("Leaderboard", "لوحة الصدارة"), icon: Award },
   ];
@@ -3269,6 +3692,7 @@ export default function LectioTracker() {
         {activeTab === "books" && <BooksTab />}
 
         {activeTab === "agpeya" && <AgpeyaTab />}
+        {activeTab === "calendar" && <CalendarTab />}
 
         {activeTab === "leaderboard" && <LeaderboardTab />}
 
