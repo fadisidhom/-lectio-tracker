@@ -2744,6 +2744,20 @@ export default function LectioTracker() {
     const last = sorted[0];
     const daysSince = last ? Math.round((new Date(todayStr() + "T00:00:00") - new Date(last.date + "T00:00:00")) / DAY_MS) : null;
 
+    // High-level stats: total logged, how many this calendar year, and the
+    // average gap between entries (a sense of pattern/regularity, not a
+    // target to hit — these are sacraments, not a habit to optimize).
+    const thisYearCount = entries.filter((e) => new Date(e.date + "T00:00:00").getFullYear() === new Date().getFullYear()).length;
+    let avgDays = null;
+    if (entries.length >= 2) {
+      const ascending = [...entries].sort((a, b) => (a.date > b.date ? 1 : -1));
+      let totalGap = 0;
+      for (let i = 1; i < ascending.length; i++) {
+        totalGap += Math.round((new Date(ascending[i].date + "T00:00:00") - new Date(ascending[i - 1].date + "T00:00:00")) / DAY_MS);
+      }
+      avgDays = Math.round(totalGap / (ascending.length - 1));
+    }
+
     const addEntry = () => {
       if (!pickDate) return;
       updater((prev) => [...prev, { id: makeId(), date: pickDate }]);
@@ -2755,6 +2769,13 @@ export default function LectioTracker() {
 
     return (
       <div className="space-y-5 lectio-fade-in">
+        {entries.length > 0 && (
+          <div className="grid grid-cols-3 gap-3">
+            <StatCard icon={<CheckCircle2 size={16} color={PALETTE.gold} />} label={t("Total logged", "الإجمالي المسجَّل")} value={entries.length} />
+            <StatCard icon={<Calendar size={16} color={PALETTE.gold} />} label={t("This year", "هذا العام")} value={thisYearCount} />
+            <StatCard icon={<Repeat size={16} color={PALETTE.gold} />} label={t("Avg. gap", "متوسط الفاصل")} value={avgDays !== null ? t(`${avgDays}d`, `${avgDays} يومًا`) : "—"} />
+          </div>
+        )}
         <Card>
           <div className="flex items-center gap-2 mb-3">
             <Icon size={16} color={PALETTE.gold} />
