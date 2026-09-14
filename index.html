@@ -22,7 +22,7 @@
     "react-dom/client": "https://esm.sh/react-dom@18.3.1/client?deps=react@18.3.1",
     "recharts": "https://esm.sh/recharts@2.12.7?deps=react@18.3.1,react-dom@18.3.1",
     "lucide-react": "https://esm.sh/lucide-react@0.383.0?deps=react@18.3.1",
-    "@supabase/supabase-js": "https://esm.sh/@supabase/supabase-js@2"
+    "@supabase/supabase-js": "https://esm.sh/@supabase/supabase-js@2.45.4"
   }
 }
 </script>
@@ -46,6 +46,7 @@
 <body>
 <div id="root"></div>
 <script type="text/babel" data-type="module" data-presets="react">
+
 import React, { useState, useEffect, useMemo, useCallback } from "react";
 import ReactDOM from "react-dom/client";
 import { createClient } from "@supabase/supabase-js";
@@ -637,7 +638,7 @@ const BOOK_VERSES = {
 const TOTAL_VERSES = Object.values(BOOK_VERSES).reduce((a, v) => a + v, 0);
 
 const STORAGE_KEY = "lectio-readings-v2";
-const DATA_VERSION = 4; // bump this whenever the saved-data shape changes, and add a case to migrateData()
+const DATA_VERSION = 5; // bump this whenever the saved-data shape changes, and add a case to migrateData()
 const PROFILE_COLORS = [PALETTE.gold, PALETTE.amber, PALETTE.burgundy, PALETTE.slate, "#4E7C59", "#6B4E8C"];
 
 // Upgrades older saved payloads to the current shape. Add a new "if (data.dataVersion < N)"
@@ -667,9 +668,13 @@ function migrateData(raw) {
   const profileData = data.profileData && typeof data.profileData === "object" ? { ...data.profileData } : {};
   // v2 -> v3: each profile also gets a `notes` map for remembered verses.
   profiles.forEach((p) => {
-    if (!profileData[p.id]) profileData[p.id] = { readings: {}, notes: {}, agpeya: {} };
+    if (!profileData[p.id]) profileData[p.id] = { readings: {}, notes: {}, agpeya: {}, confessions: [], communions: [] };
     if (!profileData[p.id].notes) profileData[p.id].notes = {};
     if (!profileData[p.id].agpeya) profileData[p.id].agpeya = {};
+    // v4 -> v5: confessions/communions — flat lists of dated entries, same
+    // shape as a single chapter's reading entries ({id, date}).
+    if (!profileData[p.id].confessions) profileData[p.id].confessions = [];
+    if (!profileData[p.id].communions) profileData[p.id].communions = [];
   });
   return { dataVersion: DATA_VERSION, profiles, profileData };
 }
@@ -725,13 +730,13 @@ async function fetchCloudData() {
   const profiles = (profileRows || []).map((r) => ({ id: r.id, name: r.name, color: r.color, isKid: !!r.is_kid }));
   const dataByProfileId = {};
   (dataRows || []).forEach((r) => {
-    dataByProfileId[r.profile_id] = { readings: r.readings || {}, notes: r.notes || {}, agpeya: r.agpeya || {} };
+    dataByProfileId[r.profile_id] = { readings: r.readings || {}, notes: r.notes || {}, agpeya: r.agpeya || {}, confessions: r.confessions || [], communions: r.communions || [] };
   });
   // Build profileData by walking `profiles` (a stable, ordered list) rather
   // than the unordered profile_data query results, so key order stays
   // deterministic between fetches too.
   const profileData = {};
-  profiles.forEach((p) => { profileData[p.id] = dataByProfileId[p.id] || { readings: {}, notes: {}, agpeya: {} }; });
+  profiles.forEach((p) => { profileData[p.id] = dataByProfileId[p.id] || { readings: {}, notes: {}, agpeya: {}, confessions: [], communions: [] }; });
   return { profiles, profileData };
 }
 
@@ -745,6 +750,8 @@ async function pushCloudData(profiles, profileData) {
     readings: profileData[id].readings || {},
     notes: profileData[id].notes || {},
     agpeya: profileData[id].agpeya || {},
+    confessions: profileData[id].confessions || [],
+    communions: profileData[id].communions || [],
     updated_at: new Date().toISOString(),
   }));
   if (rows.length) {
@@ -853,9 +860,13 @@ export default function LectioTracker() {
   const readings = (activeProfileId && profileData[activeProfileId] && profileData[activeProfileId].readings) || {};
   const notes = (activeProfileId && profileData[activeProfileId] && profileData[activeProfileId].notes) || {};
   const agpeya = (activeProfileId && profileData[activeProfileId] && profileData[activeProfileId].agpeya) || {};
+  const confessions = (activeProfileId && profileData[activeProfileId] && profileData[activeProfileId].confessions) || [];
+  const communions = (activeProfileId && profileData[activeProfileId] && profileData[activeProfileId].communions) || [];
 
   const [loaded, setLoaded] = useState(false);
-  const [activeTab, setActiveTab] = useState("books");
+  const [activeTab, setActiveTab] = useState("read");
+  const [readSubTab, setReadSubTab] = useState("books"); // "books" | "stats"
+  const [praySubTab, setPraySubTab] = useState("agpeya"); // "agpeya" | "confession" | "communion"
   const [saveState, setSaveState] = useState("idle");
   const [lang, setLang] = useState("en"); // "en" | "ar" — display-only; storage is always keyed by English names
 
@@ -1020,7 +1031,7 @@ export default function LectioTracker() {
     setProfiles((prev) => {
       const nextProfiles = [...prev, { id, name, color: color || PROFILE_COLORS[prev.length % PROFILE_COLORS.length], isKid: !!isKid }];
       setProfileData((prevData) => {
-        const nextData = { ...prevData, [id]: { readings: {}, notes: {}, agpeya: {} } };
+        const nextData = { ...prevData, [id]: { readings: {}, notes: {}, agpeya: {}, confessions: [], communions: [] } };
         persist(nextProfiles, nextData);
         return nextData;
       });
@@ -1061,7 +1072,7 @@ export default function LectioTracker() {
   };
 
   const selectProfile = (id) => setActiveProfileId(id);
-  const switchProfile = () => { setActiveProfileId(null); setActiveTab("books"); setBooksView("testaments"); setSelected(null); setExpandedStat(null); };
+  const switchProfile = () => { setActiveProfileId(null); setActiveTab("read"); setBooksView("testaments"); setSelected(null); setExpandedStat(null); };
 
   const exportData = () => {
     const payload = JSON.stringify({ dataVersion: DATA_VERSION, profiles, profileData, exportedAt: new Date().toISOString() }, null, 2);
@@ -1101,7 +1112,7 @@ export default function LectioTracker() {
   const updateReadings = (updater) => {
     if (!activeProfileId) return;
     setProfileData((prev) => {
-      const currentProfile = prev[activeProfileId] || { readings: {}, notes: {}, agpeya: {} };
+      const currentProfile = prev[activeProfileId] || { readings: {}, notes: {}, agpeya: {}, confessions: [], communions: [] };
       const nextReadings = updater(currentProfile.readings || {});
       const next = { ...prev, [activeProfileId]: { ...currentProfile, readings: nextReadings } };
       persist(profiles, next);
@@ -1112,7 +1123,7 @@ export default function LectioTracker() {
   const updateNotes = (updater) => {
     if (!activeProfileId) return;
     setProfileData((prev) => {
-      const currentProfile = prev[activeProfileId] || { readings: {}, notes: {}, agpeya: {} };
+      const currentProfile = prev[activeProfileId] || { readings: {}, notes: {}, agpeya: {}, confessions: [], communions: [] };
       const nextNotes = updater(currentProfile.notes || {});
       const next = { ...prev, [activeProfileId]: { ...currentProfile, notes: nextNotes } };
       persist(profiles, next);
@@ -1137,9 +1148,31 @@ export default function LectioTracker() {
   const updateAgpeya = (updater) => {
     if (!activeProfileId) return;
     setProfileData((prev) => {
-      const currentProfile = prev[activeProfileId] || { readings: {}, notes: {}, agpeya: {} };
+      const currentProfile = prev[activeProfileId] || { readings: {}, notes: {}, agpeya: {}, confessions: [], communions: [] };
       const nextAgpeya = updater(currentProfile.agpeya || {});
       const next = { ...prev, [activeProfileId]: { ...currentProfile, agpeya: nextAgpeya } };
+      persist(profiles, next);
+      return next;
+    });
+  };
+
+  // Confessions/communions are flat lists of dated entries — same shape as a
+  // single chapter's reading entries ({id, date}) — since they're occasional
+  // sacramental events, not a daily reset-checklist like Agpeya.
+  const updateConfessions = (updater) => {
+    if (!activeProfileId) return;
+    setProfileData((prev) => {
+      const currentProfile = prev[activeProfileId] || { readings: {}, notes: {}, agpeya: {}, confessions: [], communions: [] };
+      const next = { ...prev, [activeProfileId]: { ...currentProfile, confessions: updater(currentProfile.confessions || []) } };
+      persist(profiles, next);
+      return next;
+    });
+  };
+  const updateCommunions = (updater) => {
+    if (!activeProfileId) return;
+    setProfileData((prev) => {
+      const currentProfile = prev[activeProfileId] || { readings: {}, notes: {}, agpeya: {}, confessions: [], communions: [] };
+      const next = { ...prev, [activeProfileId]: { ...currentProfile, communions: updater(currentProfile.communions || []) } };
       persist(profiles, next);
       return next;
     });
@@ -1197,10 +1230,11 @@ export default function LectioTracker() {
     setBooksSelectedBook(book.name);
     setBooksView("chapters");
     setSelected(null);
+    setReadSubTab("books");
   };
 
   const goToChapter = (book, chapter) => {
-    setActiveTab("books");
+    setActiveTab("read");
     openBook(BOOK_BY_NAME[book]);
     setSelected({ book, chapter });
   };
@@ -1805,7 +1839,7 @@ export default function LectioTracker() {
                           `${b.name} — ${read}/${b.chapters} chapters (${Math.round(pct * 100)}%)${hasReread ? ` · book completed ${completions}×` : ""}`,
                           `${bookLabel(b.name)} — ${read}/${b.chapters} إصحاحًا (${Math.round(pct * 100)}٪)${hasReread ? ` · اكتمل السفر ${completions} مرات` : ""}`
                         )}
-                        onClick={() => { setActiveTab("books"); openBook(b); }}
+                        onClick={() => { setActiveTab("read"); openBook(b); }}
                         className="lectio-tile cursor-pointer flex-shrink-0 rounded-t-md overflow-visible relative"
                         style={{ width, border: `1px solid ${hasReread ? PALETTE.amber : PALETTE.wood}`, boxShadow: hasReread ? "0 3px 8px rgba(217,130,43,0.35)" : "0 3px 8px rgba(0,0,0,0.3)" }}
                       >
@@ -1921,7 +1955,7 @@ export default function LectioTracker() {
         <p className="text-[11px] mb-3" style={{ color: PALETTE.muted }}>{t("Counted only once a book has been read cover to cover more than once.", "تُحتسب فقط بعد قراءة السفر كاملاً أكثر من مرة.")}</p>
         <div className="space-y-1.5">
           {topRereadBooks.map((b) => (
-            <button key={b.name} onClick={() => { setActiveTab("books"); openBook(BOOK_BY_NAME[b.name]); }} className="w-full flex items-center justify-between px-3 py-1.5 rounded-lg text-sm" style={{ background: PALETTE.wood, color: PALETTE.parchment }}>
+            <button key={b.name} onClick={() => { setActiveTab("read"); openBook(BOOK_BY_NAME[b.name]); }} className="w-full flex items-center justify-between px-3 py-1.5 rounded-lg text-sm" style={{ background: PALETTE.wood, color: PALETTE.parchment }}>
               <span>{bookLabel(b.name)}</span>
               <RereadChip count={b.completions} />
             </button>
@@ -1944,7 +1978,7 @@ export default function LectioTracker() {
             const total = BOOK_BY_NAME[book].chapters;
             const pct = Math.round((chapters.length / total) * 100);
             return (
-              <button key={book} onClick={() => { setActiveTab("books"); openBook(BOOK_BY_NAME[book]); }} className="w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm" style={{ background: PALETTE.bgSoft2, color: PALETTE.parchment }}>
+              <button key={book} onClick={() => { setActiveTab("read"); openBook(BOOK_BY_NAME[book]); }} className="w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm" style={{ background: PALETTE.bgSoft2, color: PALETTE.parchment }}>
                 <span className="flex-1 text-left truncate">{bookLabel(book)}</span>
                 <div className="w-16 h-1.5 rounded-full overflow-hidden flex-shrink-0" style={{ background: PALETTE.wood }}>
                   <div style={{ width: `${pct}%`, height: "100%", background: PALETTE.gold }} />
@@ -1966,7 +2000,7 @@ export default function LectioTracker() {
             {booksCompletedDetail.length ? (
               <div className="flex flex-wrap gap-1.5">
                 {booksCompletedDetail.map((b) => (
-                  <button key={b.name} onClick={() => { setActiveTab("books"); openBook(b); }} className="text-xs rounded-full pl-3 pr-1.5 py-1 flex items-center gap-1.5" style={{ background: PALETTE.gold, color: PALETTE.ink }}>
+                  <button key={b.name} onClick={() => { setActiveTab("read"); openBook(b); }} className="text-xs rounded-full pl-3 pr-1.5 py-1 flex items-center gap-1.5" style={{ background: PALETTE.gold, color: PALETTE.ink }}>
                     <CheckCircle2 size={11} /> {bookLabel(b.name)}
                     <span
                       role="button"
@@ -1987,7 +2021,7 @@ export default function LectioTracker() {
               <p className="text-[11px] uppercase tracking-wider mb-2" style={{ color: PALETTE.muted }}>{t("Closest to finishing", "الأقرب إلى الاكتمال")}</p>
               <div className="space-y-1.5">
                 {booksInProgressDetail.map((b) => (
-                  <button key={b.name} onClick={() => { setActiveTab("books"); openBook(BOOK_BY_NAME[b.name]); }} className="w-full flex items-center justify-between px-3 py-1.5 rounded-lg text-sm" style={{ background: PALETTE.bgSoft2, color: PALETTE.parchment }}>
+                  <button key={b.name} onClick={() => { setActiveTab("read"); openBook(BOOK_BY_NAME[b.name]); }} className="w-full flex items-center justify-between px-3 py-1.5 rounded-lg text-sm" style={{ background: PALETTE.bgSoft2, color: PALETTE.parchment }}>
                     <span>{bookLabel(b.name)}</span>
                     <span style={{ color: PALETTE.gold }}>{b.read}/{b.total}</span>
                   </button>
@@ -2004,7 +2038,7 @@ export default function LectioTracker() {
       body = versesDetail.length ? (
         <div className="space-y-1.5 max-h-72 overflow-y-auto lectio-scroll pr-1">
           {versesDetail.map((v) => (
-            <button key={v.name} onClick={() => { setActiveTab("books"); openBook(BOOK_BY_NAME[v.name]); }} className="w-full flex items-center justify-between px-3 py-1.5 rounded-lg text-sm" style={{ background: PALETTE.bgSoft2, color: PALETTE.parchment }}>
+            <button key={v.name} onClick={() => { setActiveTab("read"); openBook(BOOK_BY_NAME[v.name]); }} className="w-full flex items-center justify-between px-3 py-1.5 rounded-lg text-sm" style={{ background: PALETTE.bgSoft2, color: PALETTE.parchment }}>
               <span>{bookLabel(v.name)}</span>
               <span style={{ color: PALETTE.gold }}>~{v.est.toLocaleString()} <span style={{ color: PALETTE.muted }}>/ {v.total.toLocaleString()}</span></span>
             </button>
@@ -2030,7 +2064,7 @@ export default function LectioTracker() {
           {rereadBooksDetail.length ? (
             <div className="space-y-1.5">
               {rereadBooksDetail.map((b) => (
-                <button key={b.name} onClick={() => { setActiveTab("books"); openBook(BOOK_BY_NAME[b.name]); }} className="w-full flex items-center justify-between px-3 py-1.5 rounded-lg text-sm" style={{ background: PALETTE.bgSoft2, color: PALETTE.parchment }}>
+                <button key={b.name} onClick={() => { setActiveTab("read"); openBook(BOOK_BY_NAME[b.name]); }} className="w-full flex items-center justify-between px-3 py-1.5 rounded-lg text-sm" style={{ background: PALETTE.bgSoft2, color: PALETTE.parchment }}>
                   <span>{bookLabel(b.name)}</span>
                   <RereadChip count={b.completions} />
                 </button>
@@ -2691,6 +2725,74 @@ export default function LectioTracker() {
             })}
           </div>
         </Card>
+      </div>
+    );
+  });
+
+  // Shared by both Confession and Communion — occasional sacramental events
+  // logged as dated entries, not a daily checklist. Shows time-since-last,
+  // lets you log a new entry (defaulting to today, but any past date can be
+  // picked), and a removable history list.
+  const SacramentSection = useStableComponent(({ type }) => {
+    const [pickDate, setPickDate] = useState(todayStr());
+    const isConfession = type === "confession";
+    const entries = isConfession ? confessions : communions;
+    const label = isConfession ? t("Confession", "الاعتراف") : t("Communion", "التناول");
+    const Icon = isConfession ? Lock : Sparkles;
+    const updater = isConfession ? updateConfessions : updateCommunions;
+    const sorted = [...entries].sort((a, b) => (a.date < b.date ? 1 : -1));
+    const last = sorted[0];
+    const daysSince = last ? Math.round((new Date(todayStr() + "T00:00:00") - new Date(last.date + "T00:00:00")) / DAY_MS) : null;
+
+    const addEntry = () => {
+      if (!pickDate) return;
+      updater((prev) => [...prev, { id: makeId(), date: pickDate }]);
+    };
+    const removeEntry = (id) => {
+      const ok = window.confirm(t("Remove this entry?", "إزالة هذا الإدخال؟"));
+      if (ok) updater((prev) => prev.filter((e) => e.id !== id));
+    };
+
+    return (
+      <div className="space-y-5 lectio-fade-in">
+        <Card>
+          <div className="flex items-center gap-2 mb-3">
+            <Icon size={16} color={PALETTE.gold} />
+            <h3 className="lectio-display text-lg" style={{ color: PALETTE.parchment }}>{label}</h3>
+          </div>
+          {last ? (
+            <p className="text-sm mb-4" style={{ color: PALETTE.muted }}>
+              {t(`Last: ${fmtDate(last.date)} — ${daysSince} day${daysSince === 1 ? "" : "s"} ago`, `آخر مرة: ${fmtDate(last.date)} — منذ ${daysSince} يومًا`)}
+            </p>
+          ) : (
+            <p className="text-sm mb-4" style={{ color: PALETTE.muted }}>{t("No entries logged yet.", "لم تُسجَّل أي إدخالات بعد.")}</p>
+          )}
+          <div className="flex flex-wrap items-center gap-2">
+            <input
+              type="date" value={pickDate} max={todayStr()}
+              onChange={(e) => setPickDate(e.target.value)}
+              className="text-sm rounded-md px-2 py-1.5 outline-none"
+              style={{ background: PALETTE.bgSoft2, border: `1px solid ${PALETTE.wood}`, color: PALETTE.parchment }}
+            />
+            <button onClick={addEntry} className="text-xs rounded-full px-3 py-1.5" style={{ background: PALETTE.gold, color: PALETTE.ink }}>
+              {isConfession ? t("Log confession", "سجّل اعترافًا") : t("Log communion", "سجّل تناولًا")}
+            </button>
+          </div>
+        </Card>
+
+        {sorted.length > 0 && (
+          <Card>
+            <h3 className="lectio-display text-lg mb-3" style={{ color: PALETTE.parchment }}>{t("History", "السجل")}</h3>
+            <div className="space-y-1.5">
+              {sorted.map((e) => (
+                <div key={e.id} className="flex items-center justify-between px-3 py-2 rounded-lg" style={{ background: PALETTE.bgSoft2 }}>
+                  <span className="text-sm" style={{ color: PALETTE.parchment }}>{fmtDate(e.date)}</span>
+                  <button onClick={() => removeEntry(e.id)} className="rounded p-1" style={{ color: PALETTE.inkSoft }}><Trash2 size={13} /></button>
+                </div>
+              ))}
+            </div>
+          </Card>
+        )}
       </div>
     );
   });
@@ -3525,11 +3627,10 @@ export default function LectioTracker() {
   }
 
   const NAV_TABS = [
-    { v: "books", l: t("Books", "الأسفار"), icon: Library },
-    { v: "agpeya", l: t("Agpeya", "الأجبية"), icon: Plus },
+    { v: "read", l: t("Read", "قراءة"), icon: Library },
+    { v: "pray", l: t("Pray", "صلاة"), icon: Plus },
     { v: "calendar", l: t("Calendar", "التقويم"), icon: Calendar },
-    { v: "dashboard", l: t("Bible Stats", "إحصائيات الكتاب المقدس"), icon: TrendingUp },
-    { v: "leaderboard", l: t("Leaderboard", "لوحة الصدارة"), icon: Award },
+    { v: "community", l: t("Community", "المجتمع"), icon: Award },
   ];
 
   return (
@@ -3538,7 +3639,7 @@ export default function LectioTracker() {
       <div style={{ maxWidth: 920, margin: "0 auto" }}>
         <div className="flex items-center justify-between mb-6 flex-wrap gap-3">
           <button
-            onClick={() => { setActiveTab("books"); setBooksView("testaments"); setSelected(null); setExpandedStat(null); }}
+            onClick={() => { setActiveTab("read"); setBooksView("testaments"); setSelected(null); setExpandedStat(null); }}
             className="flex items-center gap-3 text-left"
             title={t("Go to Books", "الذهاب إلى الأسفار")}
           >
@@ -3576,7 +3677,17 @@ export default function LectioTracker() {
           </div>
         </div>
 
-        {activeTab === "dashboard" && (
+        {activeTab === "read" && (
+          <div className="flex mb-5 rounded-full overflow-hidden w-fit" style={{ border: `1px solid ${PALETTE.wood}` }}>
+            {[{ v: "books", l: t("Books", "الأسفار") }, { v: "stats", l: t("Stats", "الإحصائيات") }].map((tb) => (
+              <button key={tb.v} onClick={() => setReadSubTab(tb.v)} className="lectio-pill px-4 py-2 text-sm" style={{ background: readSubTab === tb.v ? PALETTE.gold : "transparent", color: readSubTab === tb.v ? PALETTE.ink : PALETTE.muted, fontWeight: readSubTab === tb.v ? 600 : 400 }}>
+                {tb.l}
+              </button>
+            ))}
+          </div>
+        )}
+
+        {activeTab === "read" && readSubTab === "stats" && (
           <div className="space-y-5 lectio-fade-in">
             <div className="flex flex-wrap items-center gap-3 rounded-xl p-3" style={{ background: PALETTE.bgSoft, border: `1px solid ${PALETTE.wood}` }}>
               <span className="text-[11px] uppercase tracking-wider" style={{ color: PALETTE.muted }}>{t("Testament", "العهد")}</span>
@@ -3689,12 +3800,25 @@ export default function LectioTracker() {
           </div>
         )}
 
-        {activeTab === "books" && <BooksTab />}
+        {activeTab === "read" && readSubTab === "books" && <BooksTab />}
 
-        {activeTab === "agpeya" && <AgpeyaTab />}
+        {activeTab === "pray" && (
+          <>
+            <div className="flex mb-5 rounded-full overflow-hidden w-fit" style={{ border: `1px solid ${PALETTE.wood}` }}>
+              {[{ v: "agpeya", l: t("Agpeya", "الأجبية") }, { v: "confession", l: t("Confession", "الاعتراف") }, { v: "communion", l: t("Communion", "التناول") }].map((tb) => (
+                <button key={tb.v} onClick={() => setPraySubTab(tb.v)} className="lectio-pill px-4 py-2 text-sm" style={{ background: praySubTab === tb.v ? PALETTE.gold : "transparent", color: praySubTab === tb.v ? PALETTE.ink : PALETTE.muted, fontWeight: praySubTab === tb.v ? 600 : 400 }}>
+                  {tb.l}
+                </button>
+              ))}
+            </div>
+            {praySubTab === "agpeya" && <AgpeyaTab />}
+            {praySubTab === "confession" && <SacramentSection type="confession" />}
+            {praySubTab === "communion" && <SacramentSection type="communion" />}
+          </>
+        )}
         {activeTab === "calendar" && <CalendarTab />}
 
-        {activeTab === "leaderboard" && <LeaderboardTab />}
+        {activeTab === "community" && <LeaderboardTab />}
 
         <div className="flex flex-col items-center gap-2 pt-6 pb-2">
           <div className="flex items-center gap-2">
