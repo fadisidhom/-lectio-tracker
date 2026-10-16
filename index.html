@@ -84,6 +84,62 @@ const PALETTE = {
   amberDeep: "#A45A16",
 };
 
+// The manuscript page used for a single book's chapters.
+const VELLUM = {
+  page: "#EADFC6",
+  pageDeep: "#DCCDAB",
+  rule: "#CDBE9C",
+  ink: "#1A100B",
+  inkMuted: "#5C4A38",
+  rubric: "#A8321F",
+  leaf: "#C9A13B",
+};
+
+// The app's ground shifts with the Agpeya hour the clock is in. Gold stays
+// constant; only the ground, its lighter layers, rules and muted text move.
+const HOUR_TONES = {
+  prime:    { ground: "#24345A", muted: "#BCC4DA", night: false },
+  terce:    { ground: "#4A3618", muted: "#D6C39C", night: false },
+  sext:     { ground: "#5A4416", muted: "#DCCB9E", night: false },
+  none:     { ground: "#4E2A12", muted: "#D8BC9C", night: false },
+  vespers:  { ground: "#3B1A14", muted: "#C9B79A", night: false },
+  compline: { ground: "#241A3E", muted: "#BDB3D6", night: true, panel: "#33285A" },
+  midnight: { ground: "#0F1A36", muted: "#B4BCD3", night: true, panel: "#22386A" },
+};
+const HOUR_DESCRIPTIONS = {
+  prime: "The first hour, at dawn",
+  terce: "The third hour, in the morning",
+  sext: "The sixth hour, at midday",
+  none: "The ninth hour, in the afternoon",
+  vespers: "The eleventh hour, at sunset",
+  compline: "The twelfth hour, before sleep",
+  midnight: "The hour of watching, in the night",
+};
+function hourIdAt(date) {
+  const h = cairoHour(date);
+  if (h >= 6 && h < 9) return "prime";
+  if (h >= 9 && h < 12) return "terce";
+  if (h >= 12 && h < 15) return "sext";
+  if (h >= 15 && h < 18) return "none";
+  if (h >= 18 && h < 21) return "vespers";
+  if (h >= 21) return "compline";
+  return "midnight";
+}
+function mixHex(hex, other, amt) {
+  const a = parseInt(hex.slice(1), 16), b = parseInt(other.slice(1), 16);
+  const ch = (x, sh) => (x >> sh) & 255;
+  const m = (sh) => Math.round(ch(a, sh) + (ch(b, sh) - ch(a, sh)) * amt);
+  return "#" + [16, 8, 0].map((sh) => m(sh).toString(16).padStart(2, "0")).join("");
+}
+function applyHourTone(hourId) {
+  const tone = HOUR_TONES[hourId];
+  PALETTE.bg = tone.ground;
+  PALETTE.bgSoft = mixHex(tone.ground, "#FFFFFF", 0.06);
+  PALETTE.bgSoft2 = mixHex(tone.ground, "#FFFFFF", 0.1);
+  PALETTE.wood = mixHex(tone.ground, "#FFFFFF", 0.18);
+  PALETTE.muted = tone.muted;
+}
+
 // A deliberately distinct visual identity for kid profiles — bright and
 // playful rather than a resized version of the adult parchment/gold theme.
 const KID_PALETTE = {
@@ -517,7 +573,20 @@ const SYNAXARIUM = {
 };
 
 const testamentOf = (key) => TESTAMENTS.find((t) => t.key === key);
-const todayStr = () => new Date().toISOString().slice(0, 10);
+// All dates and hours in the app follow Cairo time, whatever timezone the
+// device is set to, so "today" (and which Agpeya hour it is) is the same for
+// every family member and flips at Cairo midnight, not UTC midnight.
+const APP_TZ = "Africa/Cairo";
+const cairoDateFmt = new Intl.DateTimeFormat("en-CA", { timeZone: APP_TZ, year: "numeric", month: "2-digit", day: "2-digit" });
+const cairoHourFmt = new Intl.DateTimeFormat("en-GB", { timeZone: APP_TZ, hour: "2-digit", hourCycle: "h23" });
+function cairoDateStr(date) { return cairoDateFmt.format(date); }
+function cairoHour(date) { return Number(cairoHourFmt.format(date)) % 24; }
+// Shifts a YYYY-MM-DD string by whole days without any timezone involved.
+function shiftDateStr(str, days) {
+  const [y, m, d] = str.split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1, d + days)).toISOString().slice(0, 10);
+}
+const todayStr = () => cairoDateStr(new Date());
 const DAY_MS = 86400000;
 
 // Computes leaderboard-comparable stats for any single profile's data.
@@ -571,7 +640,7 @@ function computeProfileStats(pd) {
 function computeWeeklyStats(pd) {
   const readings = (pd && pd.readings) || {};
   const agpeya = (pd && pd.agpeya) || {};
-  const cutoff = new Date(Date.now() - 6 * DAY_MS).toISOString().slice(0, 10);
+  const cutoff = shiftDateStr(todayStr(), -6);
   let weeklyChapters = 0;
   Object.values(readings).forEach((entries) => {
     (entries || []).forEach((e) => { if (e.date >= cutoff) weeklyChapters += 1; });
@@ -864,7 +933,7 @@ export default function LectioTracker() {
   const communions = (activeProfileId && profileData[activeProfileId] && profileData[activeProfileId].communions) || [];
 
   const [loaded, setLoaded] = useState(false);
-  const [activeTab, setActiveTab] = useState("read");
+  const [activeTab, setActiveTab] = useState("today");
   const [readSubTab, setReadSubTab] = useState("books"); // "books" | "stats"
   const [praySubTab, setPraySubTab] = useState("agpeya"); // "agpeya" | "confession" | "communion"
   const [saveState, setSaveState] = useState("idle");
@@ -889,6 +958,14 @@ export default function LectioTracker() {
   const [kidBook, setKidBook] = useState(null);
   const [kidTestFilter, setKidTestFilter] = useState("all");
   const [justMarked, setJustMarked] = useState(null);
+  // Re-check the clock every minute so the tone changes when an hour begins.
+  const [clock, setClock] = useState(() => new Date());
+  useEffect(() => {
+    const id = setInterval(() => setClock(new Date()), 60000);
+    return () => clearInterval(id);
+  }, []);
+  const currentHourId = hourIdAt(clock);
+  applyHourTone(currentHourId);
   const [kidBookComplete, setKidBookComplete] = useState(null); // book name, while the "you finished it!" celebration is showing
   const [addingColor, setAddingColor] = useState(PROFILE_COLORS[0]);
   // These must be declared unconditionally, before any early return below —
@@ -1072,7 +1149,7 @@ export default function LectioTracker() {
   };
 
   const selectProfile = (id) => setActiveProfileId(id);
-  const switchProfile = () => { setActiveProfileId(null); setActiveTab("read"); setBooksView("testaments"); setSelected(null); setExpandedStat(null); };
+  const switchProfile = () => { setActiveProfileId(null); setActiveTab("today"); setBooksView("testaments"); setSelected(null); setExpandedStat(null); };
 
   const exportData = () => {
     const payload = JSON.stringify({ dataVersion: DATA_VERSION, profiles, profileData, exportedAt: new Date().toISOString() }, null, 2);
@@ -1489,7 +1566,7 @@ export default function LectioTracker() {
   const agpeyaLastNDays = (n) => {
     const out = [];
     for (let i = n - 1; i >= 0; i--) {
-      const d = new Date(Date.now() - i * DAY_MS).toISOString().slice(0, 10);
+      const d = shiftDateStr(todayStr(), -i);
       const rec = agpeya[d] || {};
       out.push({ date: d, count: AGPEYA_PRAYERS.filter((p) => rec[p.id]).length });
     }
@@ -1645,7 +1722,7 @@ export default function LectioTracker() {
     const completionDate = new Date(today.getTime() + estimatedDays * DAY_MS);
     return {
       status: "ok", remaining, paceWeekly: Math.round(pace * 7 * 10) / 10, estimatedDays,
-      completionDate: completionDate.toISOString().slice(0, 10),
+      completionDate: cairoDateStr(completionDate),
     };
   }, [scopeBooks, scopeTotal, scopeRead, firstReadDate, readings]);
 
@@ -1686,9 +1763,9 @@ export default function LectioTracker() {
   // ------------------------------ UI atoms ------------------------------
   const fontImport = (
     <style>{`
-      @import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,500;0,600;0,700;1,500&family=Inter:wght@400;500;600;700&family=Amiri:ital,wght@0,400;0,700;1,400&family=Cairo:wght@400;500;600;700&family=Baloo+2:wght@500;600;700;800&family=Nunito:wght@400;600;700;800&display=swap');
-      .lectio-root { font-family: 'Inter', sans-serif; }
-      .lectio-display { font-family: 'Cormorant Garamond', serif; }
+      @import url('https://fonts.googleapis.com/css2?family=Alegreya:ital,wght@0,400;0,500;0,700;1,400&family=Alegreya+Sans:wght@400;500;700&family=Cormorant+Garamond:ital,wght@0,500;0,600;0,700;1,500&family=Inter:wght@400;500;600;700&family=Amiri:ital,wght@0,400;0,700;1,400&family=Cairo:wght@400;500;600;700&family=Baloo+2:wght@500;600;700;800&family=Nunito:wght@400;600;700;800&display=swap');
+      .lectio-root { font-family: 'Alegreya Sans', sans-serif; }
+      .lectio-display { font-family: 'Alegreya', serif; }
       .lectio-ar { font-family: 'Cairo', sans-serif; }
       .lectio-ar .lectio-display { font-family: 'Amiri', serif; }
       .lectio-kid { font-family: 'Nunito', sans-serif; }
@@ -2338,9 +2415,49 @@ export default function LectioTracker() {
     );
   });
 
-  const ChapterGrid = useStableComponent(({ book, selectMode, selectedChapters, onToggleSelect }) => {
+  const ChapterGrid = useStableComponent(({ book, vellum, nextChapter, selectMode, selectedChapters, onToggleSelect }) => {
     const cells = Array.from({ length: book.chapters }, (_, i) => i + 1);
     const tst = testamentOf(book.testament);
+    if (vellum) {
+      return (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(44px, 1fr))", gap: 8 }}>
+          {cells.map((c) => {
+            const entries = readings[keyFor(book.name, c)] || [];
+            const isRead = entries.length > 0;
+            const isReread = entries.length > 1;
+            const isNext = c === nextChapter;
+            const isPicked = selectMode && selectedChapters && selectedChapters.has(c);
+            const isOpen = !selectMode && selected && selected.book === book.name && selected.chapter === c;
+            const label = isRead ? t(`Chapter ${c}, read${isReread ? ` ${entries.length} times` : ""}`, `الإصحاح ${c}، مقروء`) : isNext ? t(`Chapter ${c}, next to read`, `الإصحاح ${c}، التالي`) : t(`Chapter ${c}, not read`, `الإصحاح ${c}، غير مقروء`);
+            return (
+              <button
+                key={c}
+                aria-label={label}
+                aria-pressed={selectMode ? !!isPicked : undefined}
+                onClick={() => (selectMode ? onToggleSelect(c) : handleCellClick(book.name, c))}
+                className="lectio-display relative flex items-center justify-center"
+                style={{
+                  height: 44, borderRadius: 22, fontSize: 17,
+                  fontWeight: isRead || isNext ? 700 : 400,
+                  background: isPicked ? VELLUM.ink : isRead ? VELLUM.leaf : "transparent",
+                  color: isPicked ? VELLUM.page : isRead ? VELLUM.ink : isNext ? VELLUM.rubric : VELLUM.inkMuted,
+                  border: isPicked ? `2px solid ${VELLUM.ink}` : isRead ? `1.5px solid ${VELLUM.ink}` : isNext ? `2.5px solid ${VELLUM.rubric}` : `1px solid ${VELLUM.rule}`,
+                  outline: isOpen ? `2px solid ${VELLUM.rubric}` : "none",
+                  outlineOffset: 2,
+                }}
+              >
+                {isPicked ? <CheckCircle2 size={18} /> : c}
+                {!selectMode && isReread && (
+                  <span className="absolute flex items-center justify-center text-[9px] font-bold rounded-full" style={{ top: -6, right: -4, minWidth: 16, height: 16, padding: "0 3px", background: VELLUM.rubric, color: VELLUM.page, fontFamily: "'Alegreya Sans', sans-serif" }}>
+                    {entries.length}
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+      );
+    }
     return (
       <div className="flex flex-wrap gap-2">
         {cells.map((c) => {
@@ -2417,7 +2534,7 @@ export default function LectioTracker() {
         });
         toMark.forEach((k, i) => {
           const daysAgo = toMark.length - i; // most recent chapter -> yesterday, earliest -> furthest back
-          const d = new Date(Date.now() - daysAgo * DAY_MS).toISOString().slice(0, 10);
+          const d = shiftDateStr(todayStr(), -daysAgo);
           next[k] = [{ id: makeId(), date: d }];
         });
         return next;
@@ -2545,43 +2662,66 @@ export default function LectioTracker() {
     if (!book) return null;
     const read = bookProgress[book.name] || 0;
     const completions = bookCompletions[book.name] || 0;
+    // A single book is shown as a manuscript page: vellum ground, an
+    // illuminated initial, rubric-red headings, chapters gilded as read.
+    const nextCh = (() => { for (let c = 1; c <= book.chapters; c++) { if (!(readings[keyFor(book.name, c)] || []).length) return c; } return null; })();
+    const title = bookLabel(book.name);
+    const initial = title.match(/[A-Za-z]/) ? title.slice(0, title.search(/[A-Za-z]/) + 1) : title.charAt(0);
+    const rest = title.slice(initial.length);
+    const pill = { minHeight: 40, padding: "0 14px", borderRadius: 20, fontSize: 13, fontWeight: 700 };
     return (
-      <div className="lectio-fade-in">
-        <div className="flex items-center gap-1 text-sm mb-3" style={{ color: PALETTE.gold }}>
-          <button onClick={() => { setBooksView("testaments"); setSelected(null); exitSelectMode(); }} className="flex items-center gap-1">{testamentLabel(book.testament)}</button>
-          <ChevronRight size={13} color={PALETTE.muted} />
-          <button onClick={() => { setBooksView("grid"); setSelected(null); exitSelectMode(); }}>{t("All books", "كل الأسفار")}</button>
-        </div>
-        <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
-          <h2 className="lectio-display text-2xl" style={{ color: PALETTE.parchment }}>{bookLabel(book.name)}</h2>
-          <span className="text-sm flex items-center gap-2" style={{ color: PALETTE.muted }}>
-            {read}/{book.chapters} {t("chapters read", "إصحاحًا مقروءًا")}
-            {completions >= 2 && <RereadChip count={completions} />}
-            {read >= book.chapters && (
-              <button
-                onClick={() => setCertModal({ type: "book", book: book.name })}
-                className="flex items-center gap-1 text-xs rounded-full px-2.5 py-1"
-                style={{ background: `linear-gradient(135deg, ${PALETTE.gold}, #B98A22)`, color: PALETTE.ink }}
-              >
-                <Award size={12} /> {t("Certificate", "الشهادة")}
-              </button>
-            )}
-          </span>
+      <div className="lectio-fade-in rounded-2xl" style={{ background: VELLUM.page, color: VELLUM.ink, padding: "20px 18px 24px", border: `2px solid ${VELLUM.ink}` }}>
+        <div className="flex items-center gap-1 text-sm mb-5" style={{ color: VELLUM.rubric, fontWeight: 700 }}>
+          <button onClick={() => { setBooksView("testaments"); setSelected(null); exitSelectMode(); }} style={{ minHeight: 36 }}>{testamentLabel(book.testament)}</button>
+          <ChevronRight size={13} color={VELLUM.inkMuted} />
+          <button onClick={() => { setBooksView("grid"); setSelected(null); exitSelectMode(); }} style={{ minHeight: 36 }}>{t("All books", "كل الأسفار")}</button>
         </div>
 
-        {!selectMode ? (
-          <button onClick={() => { setSelectMode(true); setSelected(null); }} className="mb-4 flex items-center gap-1.5 text-sm rounded-full px-3 py-1.5" style={{ background: PALETTE.bgSoft, border: `1px solid ${PALETTE.wood}`, color: PALETTE.gold }}>
-            <CheckCircle2 size={14} /> {t("Select chapters", "اختر إصحاحات")}
-          </button>
-        ) : (
-          <div className="mb-4 rounded-xl p-3 flex flex-wrap items-center gap-2" style={{ background: PALETTE.bgSoft, border: `1px solid ${PALETTE.goldSoft}` }}>
-            <span className="text-sm font-semibold" style={{ color: PALETTE.parchment }}>
+        <div className="flex items-end gap-1.5 mb-4">
+          <div className="flex items-center justify-center flex-shrink-0" style={{ width: 84, height: 84, background: VELLUM.leaf, border: `2px solid ${VELLUM.ink}`, borderRadius: 6 }}>
+            <span className="lectio-display" style={{ fontSize: 66, fontWeight: 700, color: VELLUM.rubric, lineHeight: 1, marginTop: 6 }}>{initial}</span>
+          </div>
+          <span className="lectio-display" style={{ fontSize: 40, fontWeight: 700, lineHeight: 1, paddingBottom: 6 }}>{rest}</span>
+        </div>
+
+        <div className="mb-5">
+          <p className="lectio-display" style={{ fontSize: 17, color: VELLUM.rubric, margin: "0 0 8px" }}>
+            {read >= book.chapters
+              ? t(`All ${book.chapters} chapters read.`, `قُرئت كل الإصحاحات الـ${book.chapters}.`)
+              : t(`${read} of ${book.chapters} chapters read.${nextCh ? ` Chapter ${nextCh} is next.` : ""}`, `قُرئ ${read} من ${book.chapters} إصحاحًا.`)}
+          </p>
+          <div style={{ height: 4, borderRadius: 2, background: VELLUM.pageDeep, overflow: "hidden" }}>
+            <div style={{ width: `${Math.round((read / book.chapters) * 100)}%`, height: "100%", background: VELLUM.rubric }} />
+          </div>
+          {(completions >= 2 || read >= book.chapters) && (
+            <div className="flex items-center gap-2 mt-3">
+              {completions >= 2 && <RereadChip count={completions} />}
+              {read >= book.chapters && (
+                <button onClick={() => setCertModal({ type: "book", book: book.name })} className="flex items-center gap-1.5" style={{ ...pill, background: VELLUM.leaf, color: VELLUM.ink, border: `1.5px solid ${VELLUM.ink}` }}>
+                  <Award size={14} /> {t("Certificate", "الشهادة")}
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+
+        <div className="flex items-center justify-between mb-3">
+          <span className="lectio-display" style={{ fontSize: 20, color: VELLUM.rubric }}>{t("Chapters", "الإصحاحات")}</span>
+          {!selectMode && (
+            <button onClick={() => { setSelectMode(true); setSelected(null); }} style={{ minHeight: 40, fontSize: 14, fontWeight: 700, color: VELLUM.rubric }}>
+              {t("Select chapters", "اختر إصحاحات")}
+            </button>
+          )}
+        </div>
+
+        {selectMode && (
+          <div className="mb-4 rounded-xl p-3 flex flex-wrap items-center gap-2" style={{ background: VELLUM.pageDeep, border: `1px solid ${VELLUM.rule}` }}>
+            <span className="text-sm font-semibold">
               {t(`${selectedChapters.size} selected`, `تم اختيار ${selectedChapters.size}`)}
             </span>
             <button
               onClick={() => setSelectedChapters(selectedChapters.size === book.chapters ? new Set() : new Set(Array.from({ length: book.chapters }, (_, i) => i + 1)))}
-              className="text-xs rounded-full px-3 py-1.5"
-              style={{ background: "transparent", border: `1px solid ${PALETTE.wood}`, color: PALETTE.muted }}
+              style={{ ...pill, fontWeight: 400, background: "transparent", border: `1px solid ${VELLUM.inkMuted}`, color: VELLUM.ink }}
             >
               {selectedChapters.size === book.chapters ? t("Deselect all", "إلغاء تحديد الكل") : t("Select all", "تحديد الكل")}
             </button>
@@ -2599,8 +2739,7 @@ export default function LectioTracker() {
                 if (ok) bulkMarkChaptersRead(book.name, Array.from(selectedChapters));
                 exitSelectMode();
               }}
-              className="text-xs rounded-full px-3 py-1.5"
-              style={{ background: PALETTE.gold, color: PALETTE.ink, opacity: selectedChapters.size === 0 ? 0.5 : 1 }}
+              style={{ ...pill, background: VELLUM.leaf, color: VELLUM.ink, border: `1.5px solid ${VELLUM.ink}`, opacity: selectedChapters.size === 0 ? 0.5 : 1 }}
             >
               {t("Mark as read", "علّمها كمقروءة")}
             </button>
@@ -2617,21 +2756,18 @@ export default function LectioTracker() {
                 if (ok) bulkUnmarkChaptersRead(book.name, Array.from(selectedChapters));
                 exitSelectMode();
               }}
-              className="text-xs rounded-full px-3 py-1.5"
-              style={{ background: PALETTE.burgundy, color: PALETTE.parchment, opacity: selectedChapters.size === 0 ? 0.5 : 1 }}
+              style={{ ...pill, background: VELLUM.rubric, color: VELLUM.page, opacity: selectedChapters.size === 0 ? 0.5 : 1 }}
             >
               {t("Mark as unread", "علّمها كغير مقروءة")}
             </button>
-            <button onClick={exitSelectMode} className="text-xs rounded-full px-3 py-1.5" style={{ background: "transparent", border: `1px solid ${PALETTE.wood}`, color: PALETTE.muted }}>
+            <button onClick={exitSelectMode} style={{ ...pill, fontWeight: 400, background: "transparent", border: `1px solid ${VELLUM.inkMuted}`, color: VELLUM.ink }}>
               {t("Cancel", "إلغاء")}
             </button>
           </div>
         )}
 
         {selected && selected.book === book.name && <StableSlot slotRef={detailPanelImplRef} />}
-        <Card>
-          <ChapterGrid book={book} selectMode={selectMode} selectedChapters={selectedChapters} onToggleSelect={toggleSelectChapter} />
-        </Card>
+        <ChapterGrid book={book} vellum nextChapter={nextCh} selectMode={selectMode} selectedChapters={selectedChapters} onToggleSelect={toggleSelectChapter} />
       </div>
     );
   });
@@ -2707,24 +2843,6 @@ export default function LectioTracker() {
             ))}
           </div>
         </Card>
-
-        <Card>
-          <h3 className="lectio-display text-lg mb-3" style={{ color: PALETTE.parchment }}>{t("Per-prayer totals", "إجمالي كل صلاة")}</h3>
-          <div className="space-y-1.5">
-            {agpeyaPrayerTotals.map((p) => {
-              const pct = agpeyaTotalDaysTracked ? Math.round((p.total / agpeyaTotalDaysTracked) * 100) : 0;
-              return (
-                <div key={p.id} className="flex items-center gap-3">
-                  <span className="text-sm flex-shrink-0" style={{ color: PALETTE.parchment, width: 90 }}>{t(p.name, AGPEYA_PRAYERS_AR[p.id])}</span>
-                  <div className="flex-1 h-1.5 rounded-full overflow-hidden" style={{ background: PALETTE.wood }}>
-                    <div style={{ width: `${pct}%`, height: "100%", background: PALETTE.gold }} />
-                  </div>
-                  <span className="text-xs flex-shrink-0" style={{ color: PALETTE.muted, width: 34, textAlign: "right" }}>{p.total}</span>
-                </div>
-              );
-            })}
-          </div>
-        </Card>
       </div>
     );
   });
@@ -2798,10 +2916,22 @@ export default function LectioTracker() {
             <button onClick={addEntry} className="text-xs rounded-full px-3 py-1.5" style={{ background: PALETTE.gold, color: PALETTE.ink }}>
               {isConfession ? t("Log confession", "سجّل اعترافًا") : t("Log communion", "سجّل تناولًا")}
             </button>
+            {!isConfession && last && (
+              <button
+                onClick={() => {
+                  const ok = window.confirm(t(`Remove your most recent communion (${fmtDate(last.date)})?`, `إزالة آخر تناول مسجَّل (${fmtDate(last.date)})؟`));
+                  if (ok) updater((prev) => prev.filter((e) => e.id !== last.id));
+                }}
+                className="text-xs rounded-full px-3 py-1.5"
+                style={{ background: "transparent", border: `1px solid ${PALETTE.wood}`, color: PALETTE.muted }}
+              >
+                {t("Undo last entry", "تراجع عن آخر إدخال")}
+              </button>
+            )}
           </div>
         </Card>
 
-        {sorted.length > 0 && (
+        {isConfession && sorted.length > 0 && (
           <Card>
             <h3 className="lectio-display text-lg mb-3" style={{ color: PALETTE.parchment }}>{t("History", "السجل")}</h3>
             <div className="space-y-1.5">
@@ -2825,9 +2955,7 @@ export default function LectioTracker() {
     const isToday = calDate === todayStr();
 
     const shiftDay = (delta) => {
-      const d = new Date(calDate + "T00:00:00");
-      d.setDate(d.getDate() + delta);
-      setCalDate(d.toISOString().slice(0, 10));
+      setCalDate(shiftDateStr(calDate, delta));
     };
 
     return (
@@ -3648,55 +3776,144 @@ export default function LectioTracker() {
   }
 
   const NAV_TABS = [
-    { v: "read", l: t("Read", "قراءة"), icon: Library },
-    { v: "pray", l: t("Pray", "صلاة"), icon: Plus },
-    { v: "calendar", l: t("Calendar", "التقويم"), icon: Calendar },
-    { v: "community", l: t("Community", "المجتمع"), icon: Award },
+    { v: "today", l: t("Today", "اليوم") },
+    { v: "read", l: t("Read", "قراءة") },
+    { v: "pray", l: t("Pray", "صلاة") },
+    { v: "calendar", l: t("Calendar", "التقويم") },
   ];
 
+  // ---- Today: the current hour, the day's saint, and where reading left off
+  const tone = HOUR_TONES[currentHourId];
+  const hourPrayer = AGPEYA_PRAYERS.find((p) => p.id === currentHourId);
+  const hourPrayed = !!agpeyaToday[currentHourId];
+  const todayCoptic = gregorianToCoptic(todayStr());
+  const todaySaints = SYNAXARIUM[`${todayCoptic.month}-${todayCoptic.day}`];
+  const continueBook = currentlyReadingBooks.length ? currentlyReadingBooks[0] : null;
+  const continueChapter = continueBook ? (() => { for (let c = 1; c <= continueBook.book.chapters; c++) { if (!(readings[keyFor(continueBook.book.name, c)] || []).length) return c; } return null; })() : null;
+  const GOLD_LEAF = "#C9A13B", GOLD_LIGHT = "#E3C267", ICON_INK = "#1A100B", BONE = "#EFE6D2";
+  const navBg = mixHex(PALETTE.bg, "#000000", 0.18);
+
   return (
-    <div className="lectio-root" style={{ background: `radial-gradient(circle at 20% 0%, ${PALETTE.bgSoft2}, ${PALETTE.bg} 60%)`, minHeight: "100%", padding: 20 }}>
+    <div className="lectio-root" style={{ background: PALETTE.bg, minHeight: "100vh", padding: 20, paddingBottom: "calc(96px + env(safe-area-inset-bottom))", transition: "background-color 0.6s ease" }}>
       {fontImport}
       <div style={{ maxWidth: 920, margin: "0 auto" }}>
-        <div className="flex items-center justify-between mb-6 flex-wrap gap-3">
+        <div className="flex items-center justify-between mb-6 gap-3">
           <button
-            onClick={() => { setActiveTab("read"); setBooksView("testaments"); setSelected(null); setExpandedStat(null); }}
-            className="flex items-center gap-3 text-left"
-            title={t("Go to Books", "الذهاب إلى الأسفار")}
+            onClick={() => { setActiveTab("today"); setSelected(null); setExpandedStat(null); }}
+            className="flex flex-col text-left"
+            aria-label={t("Lectio, go to Today", "لِكتيو، الذهاب إلى اليوم")}
           >
-            <BookMarked size={26} color={PALETTE.gold} />
-            <div>
-              <h1 className="lectio-display text-3xl leading-none" style={{ color: PALETTE.parchment }}>{t("Lectio", "لِكتيو")}</h1>
-              <p className="text-[11px] italic mt-1" style={{ color: PALETTE.goldSoft }}>Ἰησοῦς Χριστός, Υἱὸς Θεοῦ, Σωτήρ</p>
-            </div>
+            <span className="lectio-display" style={{ fontSize: 26, fontWeight: 700, color: GOLD_LIGHT, lineHeight: 1.1 }}>{t("Lectio", "لِكتيو")}</span>
+            <span className="lectio-display italic" style={{ fontSize: 13, color: PALETTE.muted }}>Ἰησοῦς Χριστός, Υἱὸς Θεοῦ, Σωτήρ</span>
           </button>
-          <div className="flex items-center gap-3 flex-wrap">
-            <div className="flex rounded-full overflow-hidden" style={{ border: `1px solid ${PALETTE.wood}` }}>
-              {NAV_TABS.map((tb) => {
-                const isActive = activeTab === tb.v;
-                return (
-                  <button key={tb.v} onClick={() => setActiveTab(tb.v)} className="lectio-pill px-4 py-2.5 text-sm" style={{ background: isActive ? PALETTE.gold : "transparent", color: isActive ? PALETTE.ink : PALETTE.muted, fontWeight: isActive ? 600 : 400 }}>
-                    {tb.l}
-                  </button>
-                );
-              })}
-            </div>
-            <button
-              onClick={switchProfile}
-              title={t("Switch profile", "تبديل الملف")}
-              className="flex items-center gap-2 rounded-full pl-1 pr-3 py-1.5"
-              style={{ border: `1px solid ${PALETTE.wood}` }}
+          <button
+            onClick={switchProfile}
+            aria-label={t(`Switch profile, currently ${activeProfile.name}`, "تبديل الملف")}
+            className="flex items-center gap-2 rounded-full pl-1 pr-3"
+            style={{ minHeight: 44, border: `1px solid ${PALETTE.wood}` }}
+          >
+            <span
+              className="rounded-full flex items-center justify-center lectio-display"
+              style={{ width: 34, height: 34, background: `linear-gradient(150deg, ${activeProfile.color}, ${PALETTE.bgSoft2})`, border: `1.5px solid ${GOLD_LIGHT}`, color: BONE, fontSize: 16, fontWeight: 700 }}
             >
-              <span
-                className="rounded-full flex items-center justify-center lectio-display"
-                style={{ width: 26, height: 26, background: `linear-gradient(150deg, ${activeProfile.color}, ${PALETTE.bgSoft2})`, color: PALETTE.parchment, fontSize: 13 }}
-              >
-                {activeProfile.name.trim().charAt(0).toUpperCase()}
-              </span>
-              <span className="text-xs" style={{ color: PALETTE.muted }}>{activeProfile.name}</span>
-            </button>
-          </div>
+              {activeProfile.name.trim().charAt(0).toUpperCase()}
+            </span>
+            <span className="text-sm" style={{ color: PALETTE.muted }}>{activeProfile.name}</span>
+          </button>
         </div>
+
+        {activeTab === "today" && (
+          <div className="lectio-fade-in flex flex-col" style={{ gap: 26, maxWidth: 560, margin: "0 auto" }}>
+            <div>
+              <div className="lectio-display" style={{ fontSize: 18, color: BONE }}>
+                {new Date(todayStr() + "T00:00:00").toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long" })}
+              </div>
+              <div style={{ fontSize: 14, color: PALETTE.muted }}>{copticDateLabel(todayCoptic, "en")}</div>
+            </div>
+
+            <div
+              className="flex flex-col items-center text-center"
+              style={{
+                background: tone.night ? tone.panel : GOLD_LEAF,
+                border: `2px solid ${tone.night ? GOLD_LEAF : ICON_INK}`,
+                borderRadius: "999px 999px 20px 20px",
+                padding: "44px 28px 28px",
+                gap: 12,
+                color: tone.night ? BONE : ICON_INK,
+              }}
+            >
+              <svg width="34" height="34" viewBox="0 0 34 34" fill="none" stroke={tone.night ? GOLD_LIGHT : ICON_INK} strokeWidth="2.2" strokeLinecap="round" aria-hidden="true">
+                <path d="M17 4v26M4 17h26" />
+                <circle cx="17" cy="4" r="2.2" /><circle cx="17" cy="30" r="2.2" /><circle cx="4" cy="17" r="2.2" /><circle cx="30" cy="17" r="2.2" />
+              </svg>
+              <span className="lectio-display" style={{ fontSize: 46, fontWeight: 700, lineHeight: 1, color: tone.night ? GOLD_LIGHT : ICON_INK }}>
+                {t(hourPrayer.name, AGPEYA_PRAYERS_AR[hourPrayer.id])}
+              </span>
+              <span className="lectio-display" style={{ fontSize: 17, lineHeight: 1.4 }}>{HOUR_DESCRIPTIONS[currentHourId]}</span>
+              <button
+                onClick={() => togglePrayer(todayStr(), currentHourId)}
+                aria-pressed={hourPrayed}
+                className="flex items-center gap-2"
+                style={{
+                  marginTop: 8, minHeight: 48, padding: "0 26px", borderRadius: 24, fontSize: 16, fontWeight: 700,
+                  background: hourPrayed ? "transparent" : (tone.night ? GOLD_LIGHT : ICON_INK),
+                  color: hourPrayed ? (tone.night ? GOLD_LIGHT : ICON_INK) : (tone.night ? ICON_INK : BONE),
+                  border: hourPrayed ? `2px solid ${tone.night ? GOLD_LIGHT : ICON_INK}` : "2px solid transparent",
+                }}
+              >
+                {hourPrayed && <CheckCircle2 size={18} />}
+                {hourPrayed ? t(`${hourPrayer.name} prayed`, "تمت الصلاة") : t(`I prayed ${hourPrayer.name}`, "صلّيت")}
+              </button>
+            </div>
+
+            <div className="flex flex-col" style={{ gap: 8, paddingTop: 18, borderTop: `1px solid ${PALETTE.wood}` }}>
+              <span className="lectio-display" style={{ fontSize: 18, color: BONE }}>{t("Today the Church remembers", "تذكارات اليوم")}</span>
+              {todaySaints ? (
+                <div className="grid grid-cols-2" style={{ gap: 16 }}>
+                  <div className="flex flex-col" style={{ gap: 8 }}>
+                    {todaySaints.map((it, i) => <p key={i} style={{ margin: 0, fontSize: 15, lineHeight: 1.45, color: BONE }}>{it.en}</p>)}
+                  </div>
+                  <div className="flex flex-col" dir="rtl" lang="ar" style={{ gap: 8 }}>
+                    {todaySaints.map((it, i) => <p key={i} className="lectio-ar" style={{ margin: 0, fontSize: 15, lineHeight: 1.6, color: BONE }}>{it.ar}</p>)}
+                  </div>
+                </div>
+              ) : (
+                <p style={{ margin: 0, fontSize: 15, color: PALETTE.muted }}>{t("This day hasn't been added to the Synaxarium yet.", "لم يُضف هذا اليوم إلى السنكسار بعد.")}</p>
+              )}
+            </div>
+
+            <div className="flex items-center justify-between" style={{ gap: 16, paddingTop: 18, borderTop: `1px solid ${PALETTE.wood}` }}>
+              {continueBook ? (
+                <>
+                  <div className="flex flex-col flex-1" style={{ gap: 6 }}>
+                    <span style={{ fontSize: 14, color: PALETTE.muted }}>{t("Continue reading", "تابع القراءة")}</span>
+                    <span className="lectio-display" style={{ fontSize: 26, fontWeight: 700, color: BONE }}>{bookLabel(continueBook.book.name)} {continueChapter}</span>
+                    <div style={{ height: 4, borderRadius: 2, background: PALETTE.bgSoft2, overflow: "hidden" }}>
+                      <div style={{ width: `${Math.round((continueBook.read / continueBook.book.chapters) * 100)}%`, height: "100%", background: GOLD_LEAF }} />
+                    </div>
+                    <span style={{ fontSize: 13, color: PALETTE.muted }}>{t(`${continueBook.read} of ${continueBook.book.chapters} chapters`, `${continueBook.read} من ${continueBook.book.chapters}`)}</span>
+                  </div>
+                  <button
+                    onClick={() => goToChapter(continueBook.book.name, continueChapter)}
+                    style={{ minHeight: 48, padding: "0 20px", borderRadius: 24, border: `2px solid ${GOLD_LIGHT}`, color: GOLD_LIGHT, fontWeight: 700, fontSize: 15 }}
+                  >
+                    {t(`Open ${bookLabel(continueBook.book.name)}`, "افتح")}
+                  </button>
+                </>
+              ) : (
+                <>
+                  <span style={{ fontSize: 15, color: PALETTE.muted }}>{t("Pick a book to start reading.", "اختر سفرًا لتبدأ القراءة.")}</span>
+                  <button
+                    onClick={() => { setActiveTab("read"); setReadSubTab("books"); setBooksView("testaments"); }}
+                    style={{ minHeight: 48, padding: "0 20px", borderRadius: 24, border: `2px solid ${GOLD_LIGHT}`, color: GOLD_LIGHT, fontWeight: 700, fontSize: 15 }}
+                  >
+                    {t("Browse books", "تصفّح الأسفار")}
+                  </button>
+                </>
+              )}
+            </div>
+          </div>
+        )}
 
         {activeTab === "read" && (
           <div className="flex mb-5 rounded-full overflow-hidden w-fit" style={{ border: `1px solid ${PALETTE.wood}` }}>
@@ -3799,25 +4016,6 @@ export default function LectioTracker() {
                 ))}
               </div>
             </Card>
-
-            <Shelf />
-
-            {recent.length > 0 && (
-              <Card>
-                <h3 className="lectio-display text-lg mb-3" style={{ color: PALETTE.parchment }}>{t("Recent readings", "القراءات الأخيرة")}</h3>
-                <div className="space-y-1">
-                  {recent.map((r, i) => (
-                    <button key={`${r.book}-${r.chapter}-${r.date}-${i}`} onClick={() => goToChapter(r.book, r.chapter)} className="w-full flex items-center justify-between px-3 py-2 rounded-lg text-sm" style={{ background: PALETTE.wood, color: PALETTE.parchment }}>
-                      <span className="flex items-center gap-2">
-                        {bookLabel(r.book)} {r.chapter}
-                        <RereadChip count={r.timesRead} />
-                      </span>
-                      <span style={{ color: PALETTE.gold }}>{fmtDate(r.date)}</span>
-                    </button>
-                  ))}
-                </div>
-              </Card>
-            )}
           </div>
         )}
 
@@ -3839,7 +4037,6 @@ export default function LectioTracker() {
         )}
         {activeTab === "calendar" && <CalendarTab />}
 
-        {activeTab === "community" && <LeaderboardTab />}
 
         <div className="flex flex-col items-center gap-2 pt-6 pb-2">
           <div className="flex items-center gap-2">
@@ -3926,6 +4123,28 @@ export default function LectioTracker() {
 
         <CertificateModal />
       </div>
+
+      <nav
+        aria-label={t("Main", "الرئيسية")}
+        className="fixed bottom-0 left-0 right-0 z-40"
+        style={{ background: navBg, borderTop: `1px solid ${PALETTE.wood}`, paddingBottom: "env(safe-area-inset-bottom)", transition: "background-color 0.6s ease" }}
+      >
+        <div className="grid grid-cols-4" style={{ maxWidth: 560, margin: "0 auto" }}>
+          {NAV_TABS.map((tb) => {
+            const isActive = activeTab === tb.v;
+            return (
+              <button
+                key={tb.v}
+                onClick={() => { setActiveTab(tb.v); setSelected(null); }}
+                aria-current={isActive ? "page" : undefined}
+                style={{ minHeight: 64, fontSize: 14, fontWeight: isActive ? 700 : 400, color: isActive ? GOLD_LIGHT : PALETTE.muted }}
+              >
+                {tb.l}
+              </button>
+            );
+          })}
+        </div>
+      </nav>
     </div>
   );
 }
